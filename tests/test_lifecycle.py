@@ -55,6 +55,12 @@ class Workspace:
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("__pycache__"),
         )
+        # The scriptlet dot-sources the identity helpers and refuses to run without them.
+        shutil.copytree(
+            os.path.join(REPO_ROOT, "lib"),
+            os.path.join(root, "lib"),
+            dirs_exist_ok=True,
+        )
 
     @property
     def script(self) -> str:
@@ -581,7 +587,8 @@ class TestIdentityCheckFailsClosed:
             )
             result = workspace.run("stop")
             assert result.code == 0, result.output
-            assert "is not a jevmulator daemon" in result.stdout
+            assert "is not this checkout's daemon" in result.stdout
+            assert "does not invoke -m jevmulator serve" in result.stdout
             time.sleep(0.4)
             assert victim.poll() is None
         finally:
@@ -611,7 +618,11 @@ class TestIdentityCheckFailsClosed:
             )
             result = workspace.run("stop")
             assert result.code == 0, result.output
-            assert "different Jevmulator checkout" in result.stdout
+            assert "is not this checkout's daemon" in result.stdout
+            # The refusal names the directory the process really owns, which is the other
+            # workspace, not this one.
+            assert "it owns" in result.stdout
+            assert other.root in result.stdout
 
             # The other daemon is untouched and still answers.
             assert _process_alive(other_record["pid"])

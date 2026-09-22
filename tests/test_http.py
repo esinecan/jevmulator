@@ -461,22 +461,23 @@ class TestIncompleteRequestBody:
         return raw
 
     def test_an_incomplete_body_is_answered_with_408(self) -> None:
+        """Read the whole response, not only its headers.
+
+        An earlier version of this case stopped at the blank line after the headers and
+        then asserted on the body, which had not necessarily arrived. Headers and body are
+        separate writes and can arrive in separate reads, so the case was flaky and its
+        failure said nothing about whether the 408 was sent.
+        """
         with start_daemon(
             JEVMULATOR_PROVIDER="fake", JEVMULATOR_INBOUND_TIMEOUT_SECONDS="1"
         ) as running:
             raw = self._send_partial(running.port, 5000, b'{"model": "jev-la', timeout=1.0)
             try:
-                raw.settimeout(20)
-                received = b""
-                while b"\r\n\r\n" not in received:
-                    chunk = raw.recv(4096)
-                    if not chunk:
-                        break
-                    received += chunk
+                received = _read_whole_response(raw, timeout=20.0)
             finally:
                 raw.close()
             assert b"408" in received.split(b"\r\n", 1)[0], received[:200]
-            assert b"request_timeout" in received
+            assert b"request_timeout" in received, received[:400]
 
     def test_the_daemon_serves_a_healthy_request_afterwards(self) -> None:
         with start_daemon(
@@ -522,3 +523,169 @@ class TestIncompleteRequestBody:
 
     def test_the_inbound_timeout_is_reported_in_status(self, daemon) -> None:
         assert daemon.client.status().body["config"]["inbound_timeout_seconds"] == 30.0
+
+
+def _read_whole_response(raw, timeout: float) -> bytes:
+    """Read an HTTP response completely: the headers, then the declared body, or EOF.
+
+    Headers and body are separate writes, so a reader that stops at the blank line may
+    assert on a body that has not arrived yet.
+    """
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    received = b""
+    while b"\r\n\r\n" not in received:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            return received
+        raw.settimeout(remaining)
+        try:
+            chunk = raw.recv(4096)
+        except TimeoutError:
+            return received
+        if not chunk:
+            return received
+        received += chunk
+
+    head, _, body = received.partition(b"\r\n\r\n")
+    declared = 0
+    for line in head.split(b"\r\n"):
+        if line.lower().startswith(b"content-length:"):
+            declared = int(line.split(b":", 1)[1].strip())
+            break
+
+    while len(body) < declared:
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            break
+        raw.settimeout(remaining)
+        try:
+            chunk = raw.recv(4096)
+        except TimeoutError:
+            break
+        if not chunk:
+            break
+        body += chunk
+    return head + b"\r\n\r\n" + body
+
+
+class TestTricklingClientIsBounded:
+    """A client that keeps sending one byte at a time must still reach the deadline.
+
+    ``rfile.read(n)`` loops over several underlying receives without returning, so a
+    deadline checked around that call never runs, and every trickled byte resets the
+    per-socket timeout. An independent probe held a handler open past 2.5 times the
+    configured deadline. The read now goes through ``read1``, one underlying receive at a
+    time, with the socket timeout set to the remaining budget before each one.
+    """
+
+    def test_a_trickling_client_is_answered_within_the_deadline(self) -> None:
+        import socket
+        import time as _time
+
+        inbound = 0.4
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake",
+            JEVMULATOR_INBOUND_TIMEOUT_SECONDS=str(inbound),
+        ) as running:
+            raw = socket.create_connection(("127.0.0.1", running.port), timeout=5)
+            try:
+                raw.sendall(
+                    b"POST /v1/systemone HTTP/1.1\r\n"
+                    b"Host: 127.0.0.1\r\n"
+                    b"Authorization: Bearer " + TEST_API_KEY.encode() + b"\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: 100\r\n"
+                    b"\r\n"
+                )
+                started = _time.monotonic()
+                received = b""
+                closed = False
+                # Keep trickling well past the deadline. A bounded server answers or
+                # closes long before this loop ends.
+                while _time.monotonic() - started < 3.0:
+                    try:
+                        raw.sendall(b" ")
+                    except OSError:
+                        closed = True
+                        break
+                    raw.settimeout(0.05)
+                    try:
+                        chunk = raw.recv(4096)
+                    except TimeoutError:
+                        _time.sleep(0.1)
+                        continue
+                    except (ConnectionResetError, ConnectionAbortedError):
+                        # The server closed while this client still had bytes in flight,
+                        # so Windows answered with a reset. That is the transport, not the
+                        # daemon: the property under test is that the handler stopped.
+                        closed = True
+                        break
+                    if not chunk:
+                        closed = True
+                        break
+                    received += chunk
+                    break
+                elapsed = _time.monotonic() - started
+            finally:
+                raw.close()
+
+            assert elapsed < 1.5, (
+                f"the handler was still reading after {elapsed:.2f} seconds with a "
+                f"{inbound} second inbound deadline"
+            )
+            assert received or closed, (
+                "the server neither answered nor closed the connection"
+            )
+            if received:
+                assert b"408" in received.split(b"\r\n", 1)[0], received[:200]
+
+    def test_the_daemon_serves_a_healthy_request_after_a_trickling_client(self) -> None:
+        import socket
+        import time as _time
+
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake", JEVMULATOR_INBOUND_TIMEOUT_SECONDS="0.4"
+        ) as running:
+            raw = socket.create_connection(("127.0.0.1", running.port), timeout=5)
+            try:
+                raw.sendall(
+                    b"POST /v1/systemone HTTP/1.1\r\nHost: x\r\n"
+                    b"Content-Length: 100\r\n\r\n"
+                )
+                for _ in range(6):
+                    try:
+                        raw.sendall(b" ")
+                    except OSError:
+                        break
+                    _time.sleep(0.1)
+            finally:
+                raw.close()
+
+            assert running.client.post_evaluate(MIXED_REQUEST).status == 200
+            assert running.client.status().body["metrics"]["inflight"] == 0
+
+    def test_several_trickling_clients_do_not_exhaust_the_handlers(self) -> None:
+        import socket
+        import time as _time
+
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake",
+            JEVMULATOR_INBOUND_TIMEOUT_SECONDS="0.4",
+            JEVMULATOR_MAX_INFLIGHT_REQUESTS="2",
+        ) as running:
+            sockets = []
+            try:
+                for _ in range(4):
+                    raw = socket.create_connection(("127.0.0.1", running.port), timeout=5)
+                    raw.sendall(
+                        b"POST /v1/systemone HTTP/1.1\r\nHost: x\r\n"
+                        b"Content-Length: 200\r\n\r\n" + b" "
+                    )
+                    sockets.append(raw)
+                _time.sleep(0.1)
+                assert running.client.post_evaluate(MIXED_REQUEST, timeout=30).status == 200
+            finally:
+                for raw in sockets:
+                    raw.close()

@@ -52,6 +52,14 @@ $RuntimeFile = Join-Path $StateDir 'runtime.json'
 $OutLog = Join-Path $StateDir 'daemon.out.log'
 $ErrLog = Join-Path $StateDir 'daemon.err.log'
 
+# Command-line parsing and state-directory comparison live in one file, which the
+# regression tests dot-source directly. The tests therefore exercise this code, not a copy.
+$IdentityLib = Join-Path $ProjectRoot 'lib\JevmulatorIdentity.ps1'
+if (-not (Test-Path -LiteralPath $IdentityLib)) {
+    throw "Missing $IdentityLib. The identity check cannot run, so nothing will be stopped."
+}
+. $IdentityLib
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -147,15 +155,18 @@ function Get-DaemonProcess {
       1. The process id exists.
       2. The recorded creation time is present, parses, and matches the live process
          within two seconds.
-      3. The command line is readable, invokes this package as a daemon
-         (-m jevmulator serve), and names THIS checkout state directory.
+      3. The command line is readable, invokes -m jevmulator serve as three adjacent
+         arguments, and passes a --state-dir argument whose normalized full path equals
+         THIS checkout state directory exactly.
 
       This function fails CLOSED. If any proof cannot be obtained, for example because
       the creation time was never recorded or the command line cannot be read, it returns
       $null and never hands a process to Stop-Process. An earlier version accepted a
       missing or unparsable creation time, accepted an unreadable command line, and
-      accepted any command line containing the word jevmulator, which would also match a
-      daemon belonging to a different checkout.
+      accepted any command line containing the word jevmulator. A later version compared
+      the state directory with IndexOf, which accepted a prefix collision: a daemon owning
+      ...\.jevmulator-other satisfied a check for ...\.jevmulator. The comparison now
+      parses the arguments and compares the actual --state-dir value as a full path.
 
       The refusal reason is left in $script:IdentityReason for the caller to report.
     #>
@@ -212,16 +223,9 @@ function Get-DaemonProcess {
     } catch {
         $commandLine = $null
     }
-    if ([string]::IsNullOrWhiteSpace($commandLine)) {
-        $script:IdentityReason = "process $($Record.pid) cannot be verified: its command line is not readable"
-        return $null
-    }
-    if ($commandLine -notmatch '-m\s+jevmulator\s+serve') {
-        $script:IdentityReason = "process $($Record.pid) is not a jevmulator daemon: its command line does not invoke -m jevmulator serve"
-        return $null
-    }
-    if ($commandLine.IndexOf($StateDir, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-        $script:IdentityReason = "process $($Record.pid) belongs to a different Jevmulator checkout: its command line does not name $StateDir"
+    $verdict = Test-DaemonCommandLine -CommandLine $commandLine -ExpectedStateDir $StateDir
+    if (-not $verdict.Ok) {
+        $script:IdentityReason = "process $($Record.pid) is not this checkout's daemon: $($verdict.Reason)"
         return $null
     }
 

@@ -163,6 +163,61 @@ class Handler(BaseHTTPRequestHandler):
             # An idle keep-alive connection reached the inbound timeout. Close it quietly.
             self.close_connection = True
 
+    def _read_bounded(self, length: int, deadline: float) -> bytes:
+        """Read exactly ``length`` bytes, or raise at the absolute ``deadline``.
+
+        ``rfile.read(n)`` is a buffered read that loops over several underlying receives
+        until it has ``n`` bytes. Control never returns between them, so a deadline check
+        placed around that call never runs, and a client that trickles bytes resets the
+        per-socket timeout on every receive and holds the handler open indefinitely.
+
+        This reads through ``read1``, which returns after one underlying receive, and sets
+        the socket timeout to the remaining budget before each one. The total is therefore
+        bounded by the deadline no matter how the client paces its bytes.
+        """
+        read_once = getattr(self.rfile, "read1", None) or self.rfile.read
+        base_timeout = self.state.config.inbound_timeout_seconds
+        chunks: list[bytes] = []
+        remaining = length
+        try:
+            while remaining > 0:
+                budget = deadline - time.monotonic()
+                if budget <= 0:
+                    self.close_connection = True
+                    raise errors.RequestTimeoutError(
+                        "The request body was still incomplete after "
+                        f"{base_timeout} seconds. "
+                        f"{length - remaining} of {length} bytes arrived."
+                    )
+                try:
+                    self.connection.settimeout(budget)
+                except OSError:
+                    pass
+                try:
+                    chunk = read_once(min(65536, remaining))
+                except TimeoutError as exc:
+                    self.close_connection = True
+                    raise errors.RequestTimeoutError(
+                        f"The request body stalled for {base_timeout} seconds. "
+                        f"{length - remaining} of {length} bytes arrived."
+                    ) from exc
+                if not chunk:
+                    self.close_connection = True
+                    raise errors.RequestTimeoutError(
+                        "The client closed the connection before the whole request body "
+                        f"arrived. {length - remaining} of {length} bytes arrived."
+                    )
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            # Restore the ordinary timeout, so the response write and the next keep-alive
+            # request line do not inherit a nearly expired budget.
+            try:
+                self.connection.settimeout(base_timeout if base_timeout > 0 else None)
+            except OSError:
+                pass
+        return b"".join(chunks)
+
     def _drain_request_body(self) -> None:
         """Read and discard an unread request body before an early error response.
 
@@ -188,20 +243,12 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         deadline = time.monotonic() + self.state.config.inbound_timeout_seconds
-        remaining = length
-        while remaining > 0:
-            if time.monotonic() > deadline:
-                self.close_connection = True
-                return
-            try:
-                chunk = self.rfile.read(min(65536, remaining))
-            except (TimeoutError, OSError):
-                self.close_connection = True
-                return
-            if not chunk:
-                self.close_connection = True
-                return
-            remaining -= len(chunk)
+        try:
+            self._read_bounded(length, deadline)
+        except (errors.RequestTimeoutError, OSError):
+            # The response is already being written, so there is nothing to report. The
+            # connection closes rather than staying in an unknown state.
+            self.close_connection = True
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         LOGGER.info("%s - %s", self.address_string(), format % args)
@@ -356,38 +403,9 @@ class Handler(BaseHTTPRequestHandler):
                 f"{config.max_body_bytes} byte limit."
             )
 
-        # Read in bounded chunks under one overall deadline. A per-read socket timeout
-        # alone is not enough: a client that trickles one byte at a time would reset that
-        # timeout on every chunk and hold the handler open indefinitely.
+        # One absolute deadline covers the whole body, however the client paces it.
         self._body_consumed = True
-        deadline = time.monotonic() + config.inbound_timeout_seconds
-        chunks: list[bytes] = []
-        remaining = length
-        while remaining > 0:
-            if time.monotonic() > deadline:
-                self.close_connection = True
-                raise errors.RequestTimeoutError(
-                    "The request body was still incomplete after "
-                    f"{config.inbound_timeout_seconds} seconds. "
-                    f"{length - remaining} of {length} bytes arrived."
-                )
-            try:
-                chunk = self.rfile.read(min(65536, remaining))
-            except TimeoutError as exc:
-                self.close_connection = True
-                raise errors.RequestTimeoutError(
-                    f"The request body stalled for {config.inbound_timeout_seconds} "
-                    f"seconds. {length - remaining} of {length} bytes arrived."
-                ) from exc
-            if not chunk:
-                self.close_connection = True
-                raise errors.RequestTimeoutError(
-                    "The client closed the connection before the whole request body "
-                    f"arrived. {length - remaining} of {length} bytes arrived."
-                )
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+        return self._read_bounded(length, time.monotonic() + config.inbound_timeout_seconds)
 
     def _size_guard(self, payload: dict[str, Any], request: wire.SystemOneRequest) -> None:
         """Optional approximate size guard.

@@ -69,6 +69,9 @@ Three operational routes, outside the pinned surface:
 The daemon has **no third-party Python dependencies**. Everything it needs is in the
 standard library. Tests need `pytest` and `jsonschema`, which are pinned separately.
 
+`jevmulator.ps1` needs `lib/JevmulatorIdentity.ps1` beside it. That file holds the process
+ownership proofs, and the scriptlet refuses to run without it rather than skipping them.
+
 ---
 
 ## Install
@@ -649,8 +652,11 @@ missing it terminates nothing and prints the reason. Common reasons:
   `python -m jevmulator serve` rather than by the scriptlet. Stop it with Ctrl+C.
 - *is a different process* — Windows gave that process id to an unrelated program. Nothing
   was terminated and the runtime file was removed. Start again.
-- *belongs to a different Jevmulator checkout* — another clone owns that daemon. Stop it
-  from its own directory.
+- *it owns ...* — another clone owns that daemon. Stop it from its own directory. The
+  comparison parses the daemon's `--state-dir` argument and compares full paths, so a
+  sibling directory such as `.jevmulator-other` does not count as a match.
+- *its command line is not readable* — the process id could not be queried. Nothing is
+  terminated when ownership cannot be proved.
 
 ---
 

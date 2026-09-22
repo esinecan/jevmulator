@@ -24,20 +24,20 @@ python -m pip install -e ".[dev]" -c constraints-dev.txt
 cd tests\js; npm ci; cd ..\..
 
 python -m pytest tests/ -q -m "not windows and not live"
-# 351 passed, 1 skipped, 34 deselected in 26.58s
+# 354 passed, 1 skipped, 67 deselected in 27.95s
 
-python -m pytest tests/test_lifecycle.py -q
-# 34 passed in 262.54s
+python -m pytest tests/ -q -m "windows"
+# 67 passed, 1 skipped, 354 deselected in 272.07s
 
 $env:JEVMULATOR_LIVE_TESTS = "1"
 python -m pytest tests/live -q -s
 # 12 passed in 28.36s
 ```
 
-The one skip is `tests/live/test_glm_flash.py`, which declines to run unless
-`JEVMULATOR_LIVE_TESTS=1` is set. The 34 deselected are the Windows lifecycle cases.
+The one skip in each selection is `tests/live/test_glm_flash.py`, which declines to run
+unless `JEVMULATOR_LIVE_TESTS=1` is set.
 
-**Total: 397 tests, all passing.**
+**Total: 433 tests, all passing:** 354 offline, 67 Windows and 12 live.
 
 The live figure is from the run of 2026-09-22 at about 19:36 UTC. It has not been re-run
 since, because no further live call was made after the supervisor directive at 20:07 UTC.
@@ -52,13 +52,14 @@ read path, none of which the live suite exercises.
 | `tests/test_wire.py` | 55 | Request acceptance and rejection against the pinned schema. |
 | `tests/test_prompts.py` | 28 | Prompt construction, including the option-naming defect the live run found. |
 | `tests/test_schema_conformance.py` | 33 | `jsonschema` validation against `contract/schemas/wire-*.json`, plus the eight documentation examples and the historical cassette. |
-| `tests/test_http.py` | 65 | Real loopback HTTP: auth, malformed input, limits, headers, concurrency, cleanup. |
+| `tests/test_http.py` | 68 | Real loopback HTTP: auth, malformed input, limits, headers, concurrency, cleanup. |
 | `tests/test_upstream_failures.py` | 46 | A controlled fake upstream HTTP server: invalid output, refusal, status mapping, retry and repair bounds, timeouts. |
 | `tests/test_isolation.py` | 21 | Question independence and question-ID invisibility, proved on recorded upstream payloads. |
 | `tests/test_consumers.py` | 23 | The retained raw consumers re-expressed as validators. |
 | `tests/test_sdk_python.py` | 21 | The pinned Python SDK against the real daemon. |
 | `tests/test_sdk_js.py` | 5 | The pinned JavaScript SDK against the real daemon, wrapping 15 JavaScript cases in `tests/js/run.mjs`. |
 | `tests/test_lifecycle.py` | 34 | `jevmulator.ps1` on this host, including the fail-closed identity checks. |
+| `tests/test_identity.py` | 33 | The process-ownership proofs, tested directly against the shared library. |
 | `tests/live/test_glm_flash.py` | 12 | Bounded real calls to `glm-5.3-flash`. |
 
 ## No test reaches a live provider by default
@@ -507,5 +508,125 @@ Command and result:
 
 ```powershell
 python -m pytest tests/ -q -m "not windows and not live"
-# 351 passed, 1 skipped, 34 deselected in 26.58s
+# 354 passed, 1 skipped, 67 deselected in 27.95s
 ```
+
+---
+
+## Second acceptance review
+
+An independent rerun and two targeted probes found one test defect and two implementation
+bugs in commit `dda6296`. All three are fixed. No live provider call was made.
+
+### 15. The 408 test read only the response headers
+
+The independent rerun reported `350 passed, 1 failed, 1 skipped`. The failure was
+`TestIncompleteRequestBody::test_an_incomplete_body_is_answered_with_408`, which stopped
+reading at the blank line after the headers and then asserted on the body. Headers and body
+are separate writes and can arrive in separate reads, so the case was flaky.
+
+**This was a test defect, not evidence that the 408 was absent.** The case now reads the
+declared `Content-Length` body, or to end of stream, through a `_read_whole_response`
+helper before asserting.
+
+### 16. The whole-body deadline did not bound a trickling client
+
+`rfile.read(n)` is a buffered read. It loops over several underlying receives without
+returning, so the deadline check placed around that call never ran, and each trickled byte
+reset the per-socket timeout. The bound existed only against a client that went completely
+silent.
+
+An independent probe set `inbound_timeout=0.4`, declared `Content-Length: 100`, and sent one
+space every 0.1 seconds. The server was still reading at 1.0 seconds, **2.5 times the
+deadline**.
+
+`Handler._read_bounded` now reads through `read1`, which returns after **one** underlying
+receive, and sets the socket timeout to the remaining budget before each one. Both
+`_read_body` and `_drain_request_body` go through it, so the total is bounded by one
+absolute deadline however the client paces its bytes. The socket timeout is restored in a
+`finally`, so the response write and the next keep-alive request line do not inherit a
+nearly expired budget.
+
+The same probe against the fixed build:
+
+```
+inbound_timeout=0.4s, Content-Length=100, one space per 0.1s
+  server acted after 0.47s -> connection reset by server
+  daemon still healthy afterwards: 200
+```
+
+`tests/test_http.py::TestTricklingClientIsBounded` adds three cases: a trickling client
+answered or closed inside 1.5 seconds against a 0.4 second deadline, a healthy request
+served afterwards on the same daemon, and four simultaneous tricklers that do not exhaust
+the handlers.
+
+One transport detail is asserted honestly. When the daemon closes while the client still has
+bytes in flight, Windows answers with a reset, and the already-written 408 body can be
+discarded. The property under test is that the handler **stopped**, so the case accepts
+either a 408 or a prompt close, and asserts the elapsed bound in both. A client that stops
+sending does receive the 408; that is the separate `TestIncompleteRequestBody` case.
+
+### 17. The state-directory comparison accepted a prefix collision
+
+`$commandLine.IndexOf($StateDir)` matched any substring. A daemon owning
+`C:\probe\.jevmulator-other` therefore satisfied a check for `C:\probe\.jevmulator`, and the
+expected path appearing inside an unrelated argument also satisfied it. An independent
+non-destructive probe at `run/probe-identity.ps1` demonstrated the first case.
+
+The comparison now parses the command line into arguments and compares the actual
+`--state-dir` value as a normalized full path:
+
+- `lib/JevmulatorIdentity.ps1` holds `ConvertFrom-ProcessCommandLine`, which follows the
+  `CommandLineToArgvW` rules for quotes and backslashes, `Get-ArgumentValue`, which accepts
+  both `--state-dir VALUE` and `--state-dir=VALUE`, `Get-NormalizedDirectory`, and
+  `Test-DaemonCommandLine`.
+- The module invocation is anchored at argument boundaries: `-m`, `jevmulator` and `serve`
+  must be three adjacent arguments. Text inside a path no longer satisfies it.
+- A missing or unusable value is a refusal, so the check stays closed.
+
+`jevmulator.ps1` dot-sources that file and **refuses to run without it**, so losing the
+library stops the scriptlet rather than silently skipping the proof.
+
+`tests/test_identity.py` adds 33 non-destructive cases that dot-source the same library, so
+they exercise the code that runs rather than a copy of it. They cover the reviewer's exact
+prefix collision, a nested path, a parent path, a different drive, the expected path inside
+another argument, the expected path as the executable, a missing and a dangling
+`--state-dir`, four anchoring cases, three fail-closed cases, and six command-line parsing
+cases. No case starts or terminates a process.
+
+Running the reviewer's own probe shape against the fixed library:
+
+```
+case     : prefix collision
+accepted : False
+reason   : it owns C:\probe\.jevmulator-other, not C:\probe\.jevmulator
+
+case     : exact match
+accepted : True
+```
+
+### Final counts
+
+| Suite | After the first review | Now |
+|---|---|---|
+| `tests/test_http.py` | 65 | 68 |
+| `tests/test_identity.py` | — | 33 |
+| `tests/test_lifecycle.py` | 34 | 34 |
+| Offline selection | 351 passed, 1 skipped | 354 passed, 1 skipped |
+| Windows selection | 34 passed | 67 passed, 1 skipped |
+
+```powershell
+python -m pytest tests/ -q -m "not windows and not live"
+# 354 passed, 1 skipped, 67 deselected in 27.95s
+
+python -m pytest tests/ -q -m "windows"
+# 67 passed, 1 skipped, 354 deselected in 272.07s
+```
+
+The Windows selection is the 33 identity cases plus the 34 lifecycle cases. The one skip in
+each selection is the live module, which declines to run without `JEVMULATOR_LIVE_TESTS=1`.
+
+**433 tests in total: 354 offline, 67 Windows and 12 live.**
+
+The HTTP suite was run three times in a row at 68 passed each time, to confirm the
+previously flaky case is stable rather than lucky.
