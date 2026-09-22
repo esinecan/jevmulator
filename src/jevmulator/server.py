@@ -138,6 +138,19 @@ class Handler(BaseHTTPRequestHandler):
     def state(self) -> DaemonState:
         return self.server.state  # type: ignore[attr-defined]
 
+    def setup(self) -> None:
+        """Bound every read on this connection.
+
+        Without a socket timeout, a client that opens a connection, declares a body and
+        then stops sending occupies one handler thread for as long as it likes. The
+        evaluation deadline never applies, because the request never reaches the
+        evaluator.
+        """
+        super().setup()
+        timeout = self.server.state.config.inbound_timeout_seconds  # type: ignore[attr-defined]
+        if timeout > 0:
+            self.connection.settimeout(timeout)
+
     def handle_one_request(self) -> None:
         self._body_consumed = False
         try:
@@ -145,6 +158,9 @@ class Handler(BaseHTTPRequestHandler):
         except CLIENT_DISCONNECTED:
             # A client that drops its keep-alive socket is ordinary, not a fault. Node's
             # fetch agent and Python's urllib both do it at exit.
+            self.close_connection = True
+        except TimeoutError:
+            # An idle keep-alive connection reached the inbound timeout. Close it quietly.
             self.close_connection = True
 
     def _drain_request_body(self) -> None:
@@ -171,11 +187,20 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_DRAIN_BYTES:
             self.close_connection = True
             return
+        deadline = time.monotonic() + self.state.config.inbound_timeout_seconds
         remaining = length
         while remaining > 0:
-            chunk = self.rfile.read(min(65536, remaining))
+            if time.monotonic() > deadline:
+                self.close_connection = True
+                return
+            try:
+                chunk = self.rfile.read(min(65536, remaining))
+            except (TimeoutError, OSError):
+                self.close_connection = True
+                return
             if not chunk:
-                break
+                self.close_connection = True
+                return
             remaining -= len(chunk)
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -217,6 +242,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, self._status())
                 return
             if path == OPERATIONAL_PREFIX + "debug/upstream-calls":
+                # The recording holds caller state, instructions and whole prompts, so it
+                # is at least as sensitive as the evaluate route and carries the same
+                # bearer requirement.
+                self._require_auth()
                 if not self.state.config.debug_record:
                     raise errors.NotFoundError(
                         "Upstream call recording is off. Set JEVMULATOR_DEBUG_RECORD=1 "
@@ -236,6 +265,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             if path == OPERATIONAL_PREFIX + "debug/upstream-calls":
+                self._require_auth()
                 if not self.state.config.debug_record:
                     raise errors.NotFoundError(
                         "Upstream call recording is off. Set JEVMULATOR_DEBUG_RECORD=1 "
@@ -290,6 +320,12 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     def _require_auth(self) -> None:
+        """Require the daemon bearer token.
+
+        Health and status stay open, because readiness polling must work before a caller
+        holds a key and neither route returns a secret or any caller content. The debug
+        recording route is not open: it returns the prompts, which carry caller content.
+        """
         header = self.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
             raise errors.UnauthorizedError()
@@ -319,8 +355,39 @@ class Handler(BaseHTTPRequestHandler):
                 f"The request body is {length} bytes, above the "
                 f"{config.max_body_bytes} byte limit."
             )
+
+        # Read in bounded chunks under one overall deadline. A per-read socket timeout
+        # alone is not enough: a client that trickles one byte at a time would reset that
+        # timeout on every chunk and hold the handler open indefinitely.
         self._body_consumed = True
-        return self.rfile.read(length)
+        deadline = time.monotonic() + config.inbound_timeout_seconds
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining > 0:
+            if time.monotonic() > deadline:
+                self.close_connection = True
+                raise errors.RequestTimeoutError(
+                    "The request body was still incomplete after "
+                    f"{config.inbound_timeout_seconds} seconds. "
+                    f"{length - remaining} of {length} bytes arrived."
+                )
+            try:
+                chunk = self.rfile.read(min(65536, remaining))
+            except TimeoutError as exc:
+                self.close_connection = True
+                raise errors.RequestTimeoutError(
+                    f"The request body stalled for {config.inbound_timeout_seconds} "
+                    f"seconds. {length - remaining} of {length} bytes arrived."
+                ) from exc
+            if not chunk:
+                self.close_connection = True
+                raise errors.RequestTimeoutError(
+                    "The client closed the connection before the whole request body "
+                    f"arrived. {length - remaining} of {length} bytes arrived."
+                )
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def _size_guard(self, payload: dict[str, Any], request: wire.SystemOneRequest) -> None:
         """Optional approximate size guard.

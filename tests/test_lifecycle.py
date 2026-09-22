@@ -413,7 +413,9 @@ class TestUnrelatedProcessProtection:
             )
             result = workspace.run("status")
             assert result.code == 1
-            assert "belongs to something else" in result.stdout
+            assert "not running" in result.stdout
+            assert "Identity check refused" in result.stdout
+            assert "is a different process" in result.stdout
         finally:
             victim.kill()
             victim.wait(timeout=10)
@@ -499,3 +501,179 @@ def _dead_pid() -> int:
     )
     process.wait(timeout=30)
     return process.pid
+
+
+class TestIdentityCheckFailsClosed:
+    """Get-DaemonProcess must refuse to act whenever a proof is unavailable.
+
+    The earlier version failed open in three ways. It accepted a runtime file with no
+    recorded creation time, it accepted an unreadable command line, and it accepted any
+    command line containing the word jevmulator, which also matches a daemon belonging to
+    a different checkout. Each of those would have let `stop` terminate something this
+    checkout does not own.
+
+    No case here terminates an unrelated process. The one live process a case creates is
+    owned by that case and is killed by the case itself, not by the scriptlet.
+    """
+
+    def _runtime(self, pid: int, port: int, **overrides) -> dict:
+        record = {
+            "pid": pid,
+            "port": port,
+            "base_url": f"http://127.0.0.1:{port}",
+            "health_url": f"http://127.0.0.1:{port}/_jevmulator/health",
+            "api_key": "lifecycle-test-key",
+        }
+        record.update(overrides)
+        return record
+
+    def test_a_missing_creation_time_is_refused(self, workspace) -> None:
+        victim = _sleeping_process()
+        try:
+            workspace.write_runtime(self._runtime(victim.pid, 8769))
+            result = workspace.run("stop")
+            assert result.code == 0, result.output
+            assert "Identity check refused" in result.stdout
+            assert "records no creation time" in result.stdout
+            time.sleep(0.4)
+            assert victim.poll() is None, "stop terminated a process it could not verify"
+        finally:
+            _kill(victim)
+
+    def test_a_malformed_creation_time_is_refused(self, workspace) -> None:
+        victim = _sleeping_process()
+        try:
+            workspace.write_runtime(
+                self._runtime(victim.pid, 8769, process_start_time="not a date at all")
+            )
+            result = workspace.run("stop")
+            assert result.code == 0, result.output
+            assert "is not a date" in result.stdout
+            time.sleep(0.4)
+            assert victim.poll() is None
+        finally:
+            _kill(victim)
+
+    def test_a_mismatched_creation_time_is_refused(self, workspace) -> None:
+        victim = _sleeping_process()
+        try:
+            workspace.write_runtime(
+                self._runtime(
+                    victim.pid,
+                    8769,
+                    process_start_time="2020-01-01T00:00:00.0000000+00:00",
+                )
+            )
+            result = workspace.run("stop")
+            assert result.code == 0, result.output
+            assert "is a different process" in result.stdout
+            time.sleep(0.4)
+            assert victim.poll() is None
+        finally:
+            _kill(victim)
+
+    def test_a_process_that_is_not_a_daemon_is_refused(self, workspace) -> None:
+        """Correct creation time, but the command line does not invoke the daemon."""
+        victim = _sleeping_process()
+        try:
+            workspace.write_runtime(
+                self._runtime(victim.pid, 8769, process_start_time=_start_time_of(victim.pid))
+            )
+            result = workspace.run("stop")
+            assert result.code == 0, result.output
+            assert "is not a jevmulator daemon" in result.stdout
+            time.sleep(0.4)
+            assert victim.poll() is None
+        finally:
+            _kill(victim)
+
+    def test_a_daemon_of_a_different_checkout_is_refused(self, workspace, tmp_path) -> None:
+        """A real Jevmulator daemon, but one that owns another state directory.
+
+        The word jevmulator appears in its command line, which the earlier check accepted.
+        The state-directory proof rejects it.
+        """
+        other = Workspace(str(tmp_path / "other checkout"))
+        port = free_port()
+        try:
+            started = other.run("start", "-Port", str(port), "-ReadyTimeoutSeconds", READY_TIMEOUT)
+            assert started.code == 0, started.output
+            other_record = other.read_runtime()
+
+            # This workspace claims the other checkout's daemon, with a correct pid and a
+            # correct creation time. Only the state directory differs.
+            workspace.write_runtime(
+                self._runtime(
+                    other_record["pid"],
+                    other_record["port"],
+                    process_start_time=other_record["process_start_time"],
+                )
+            )
+            result = workspace.run("stop")
+            assert result.code == 0, result.output
+            assert "different Jevmulator checkout" in result.stdout
+
+            # The other daemon is untouched and still answers.
+            assert _process_alive(other_record["pid"])
+            assert other.run("status").code == 0
+        finally:
+            other.stop_quietly()
+
+    def test_status_states_the_refusal_reason(self, workspace) -> None:
+        victim = _sleeping_process()
+        try:
+            workspace.write_runtime(self._runtime(victim.pid, 8769))
+            result = workspace.run("status")
+            assert result.code == 1
+            assert "Identity check refused" in result.stdout
+            time.sleep(0.4)
+            assert victim.poll() is None
+        finally:
+            _kill(victim)
+
+    def test_a_verified_daemon_is_still_stopped(self, workspace) -> None:
+        """The check refuses what it cannot prove, and still acts on what it can."""
+        port = free_port()
+        assert workspace.run(
+            "start", "-Port", str(port), "-ReadyTimeoutSeconds", READY_TIMEOUT
+        ).code == 0
+        record = workspace.read_runtime()
+        result = workspace.run("stop")
+        assert result.code == 0, result.output
+        assert "stopped" in result.stdout
+        deadline = time.time() + 10
+        while time.time() < deadline and _process_alive(record["pid"]):
+            time.sleep(0.2)
+        assert not _process_alive(record["pid"])
+
+
+def _sleeping_process() -> subprocess.Popen:
+    """A live process this test owns, which the scriptlet must never terminate."""
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _kill(process: subprocess.Popen) -> None:
+    process.kill()
+    process.wait(timeout=10)
+
+
+def _start_time_of(pid: int) -> str:
+    """The creation time of a process, in the round-trip format the scriptlet writes."""
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            f"(Get-Process -Id {pid}).StartTime.ToString('o',"
+            " [System.Globalization.CultureInfo]::InvariantCulture)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return completed.stdout.strip()

@@ -55,7 +55,7 @@ Three operational routes, outside the pinned surface:
 |---|---|
 | `GET /_jevmulator/health` | Is the daemon up, and can it reach an upstream model? |
 | `GET /_jevmulator/status` | The whole configuration and some counters. Never a secret. |
-| `GET /_jevmulator/debug/upstream-calls` | The exact payloads sent upstream. Off by default. |
+| `GET /_jevmulator/debug/upstream-calls` | The exact payloads sent upstream. Off by default, and requires the bearer token. |
 
 ---
 
@@ -397,6 +397,7 @@ sent only in the `Authorization` header of the upstream request.
 |---|---|---|
 | `JEVMULATOR_UPSTREAM_TIMEOUT_SECONDS` | `60` | One upstream call. |
 | `JEVMULATOR_REQUEST_TIMEOUT_SECONDS` | `120` | The whole evaluation. Past it, outstanding work is cancelled and the daemon returns 504. |
+| `JEVMULATOR_INBOUND_TIMEOUT_SECONDS` | `30` | How long a client may take to finish sending its request body. Past it, the daemon returns 408 and closes the connection. |
 | `JEVMULATOR_UPSTREAM_RETRIES` | `2` | Retries after a connection error, 408, 429 or 5xx. `retry-after` is honoured. |
 | `JEVMULATOR_REPAIR_RETRIES` | `1` | Corrective re-asks after an unusable model answer. |
 | `JEVMULATOR_RETRY_BACKOFF_SECONDS` | `0.5` | First backoff step. It doubles each attempt. |
@@ -492,6 +493,7 @@ Every other status carries an object:
 | 401 | `authentication_error` | Missing or wrong daemon token. |
 | 404 | `not_found` | No such route. |
 | 405 | `method_not_allowed` | Right route, wrong method. |
+| 408 | `request_timeout` | The client declared a body and did not finish sending it inside `JEVMULATOR_INBOUND_TIMEOUT_SECONDS`. |
 | 413 | `request_too_large` | Body above `JEVMULATOR_MAX_BODY_BYTES`. |
 | 422 | (array body) | The request does not satisfy the pinned schema. |
 | 422 | `max_tokens_exceeded` | A character guard rejected the request. |
@@ -534,10 +536,16 @@ To see exactly what goes upstream, turn recording on:
 ```powershell
 $env:JEVMULATOR_DEBUG_RECORD = "1"
 .\jevmulator.ps1 restart
-curl.exe -s http://127.0.0.1:8769/_jevmulator/debug/upstream-calls
+curl.exe -s http://127.0.0.1:8769/_jevmulator/debug/upstream-calls `
+  -H "Authorization: Bearer local-dev-token"
 ```
 
-The route holds the last 200 calls and disappears when recording is off.
+**This route requires the bearer token.** The recording holds your state, your instructions
+and the whole prompts, so it is at least as sensitive as the evaluate route. It holds the
+last 200 calls, and it returns 404 to an authenticated caller when recording is off.
+
+`/_jevmulator/health` and `/_jevmulator/status` need no token. Readiness polling has to work
+before a caller holds a key, and neither route returns a secret or any caller content.
 
 ---
 
@@ -631,9 +639,18 @@ moved it off the default.
 Every question is one upstream call, and four run at a time. Raise
 `JEVMULATOR_REQUEST_TIMEOUT_SECONDS`, or raise `JEVMULATOR_MAX_UPSTREAM_CONCURRENCY`.
 
-**`stop` says the process belongs to something else**
-Windows gave that process id to an unrelated program. Nothing was terminated, and the
-runtime file was removed. Start again.
+**`stop` or `status` says "Identity check refused"**
+The scriptlet acts on a process only when it can prove the process is this checkout's
+daemon: the recorded creation time must match, and the command line must invoke
+`-m jevmulator serve` and name this checkout's `.jevmulator` directory. When any proof is
+missing it terminates nothing and prints the reason. Common reasons:
+
+- *records no creation time* — the daemon was started by hand with
+  `python -m jevmulator serve` rather than by the scriptlet. Stop it with Ctrl+C.
+- *is a different process* — Windows gave that process id to an unrelated program. Nothing
+  was terminated and the runtime file was removed. Start again.
+- *belongs to a different Jevmulator checkout* — another clone owns that daemon. Stop it
+  from its own directory.
 
 ---
 

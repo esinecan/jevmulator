@@ -54,6 +54,7 @@ JEVMULATOR_VARS = [
     "JEVMULATOR_MAX_STATE_CHARS",
     "JEVMULATOR_MAX_REQUEST_CHARS",
     "JEVMULATOR_DEBUG_RECORD",
+    "JEVMULATOR_INBOUND_TIMEOUT_SECONDS",
     "JEVMULATOR_LOG_LEVEL",
     "JEVMULATOR_FAKE_MODE",
     "JEVMULATOR_FAKE_DELAY_SECONDS",
@@ -141,12 +142,13 @@ class DaemonClient:
         return self.request("GET", "/_jevmulator/status", api_key=None)
 
     def recorded_calls(self) -> list[dict[str, Any]]:
-        response = self.request("GET", "/_jevmulator/debug/upstream-calls", api_key=None)
+        """The recorded upstream payloads. This route requires the daemon bearer token."""
+        response = self.request("GET", "/_jevmulator/debug/upstream-calls")
         assert response.status == 200, response.body
         return response.body["calls"]
 
     def clear_recorded(self) -> None:
-        self.request("DELETE", "/_jevmulator/debug/upstream-calls", api_key=None)
+        self.request("DELETE", "/_jevmulator/debug/upstream-calls")
 
 
 def _maybe_json(payload: str) -> Any:

@@ -138,40 +138,90 @@ function Test-PortInUse {
     }
 }
 
+$script:IdentityReason = ''
+
 function Get-DaemonProcess {
     <#
-      Returns the process only when it is really this daemon: the process id must exist,
-      its recorded start time must match, and its command line must name jevmulator.
-      Anything else returns $null, so an unrelated process that reused the id is safe.
+      Return the process ONLY when three proofs all hold, and $null otherwise.
+
+      1. The process id exists.
+      2. The recorded creation time is present, parses, and matches the live process
+         within two seconds.
+      3. The command line is readable, invokes this package as a daemon
+         (-m jevmulator serve), and names THIS checkout state directory.
+
+      This function fails CLOSED. If any proof cannot be obtained, for example because
+      the creation time was never recorded or the command line cannot be read, it returns
+      $null and never hands a process to Stop-Process. An earlier version accepted a
+      missing or unparsable creation time, accepted an unreadable command line, and
+      accepted any command line containing the word jevmulator, which would also match a
+      daemon belonging to a different checkout.
+
+      The refusal reason is left in $script:IdentityReason for the caller to report.
     #>
     param($Record)
 
-    if ($null -eq $Record) { return $null }
-    if (-not ($Record.PSObject.Properties.Name -contains 'pid')) { return $null }
+    $script:IdentityReason = ''
 
-    $process = Get-Process -Id $Record.pid -ErrorAction SilentlyContinue
-    if ($null -eq $process) { return $null }
-
-    if ($Record.PSObject.Properties.Name -contains 'process_start_time') {
-        $recorded = $null
-        try { $recorded = [datetime]::Parse($Record.process_start_time, [System.Globalization.CultureInfo]::InvariantCulture) } catch { $recorded = $null }
-        if ($null -ne $recorded) {
-            $delta = [math]::Abs(($process.StartTime - $recorded).TotalSeconds)
-            if ($delta -gt 2) {
-                Write-Verbose "Process $($Record.pid) start time differs by $delta seconds; treating as an unrelated process."
-                return $null
-            }
-        }
+    if ($null -eq $Record) {
+        $script:IdentityReason = 'no runtime record'
+        return $null
+    }
+    if (-not ($Record.PSObject.Properties.Name -contains 'pid')) {
+        $script:IdentityReason = 'the runtime file records no process id'
+        return $null
     }
 
+    $process = Get-Process -Id $Record.pid -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        $script:IdentityReason = "process $($Record.pid) no longer exists"
+        return $null
+    }
+
+    # -- proof 2: creation time, required ---------------------------------
+    if (-not ($Record.PSObject.Properties.Name -contains 'process_start_time')) {
+        $script:IdentityReason = "process $($Record.pid) cannot be verified: the runtime file records no creation time"
+        return $null
+    }
+    $recorded = $null
+    try {
+        $recorded = [datetime]::Parse($Record.process_start_time, [System.Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        $recorded = $null
+    }
+    if ($null -eq $recorded) {
+        $script:IdentityReason = "process $($Record.pid) cannot be verified: the recorded creation time is not a date"
+        return $null
+    }
+    $actual = $null
+    try { $actual = $process.StartTime } catch { $actual = $null }
+    if ($null -eq $actual) {
+        $script:IdentityReason = "process $($Record.pid) cannot be verified: its creation time is not readable"
+        return $null
+    }
+    $delta = [math]::Abs(($actual - $recorded).TotalSeconds)
+    if ($delta -gt 2) {
+        $script:IdentityReason = "process $($Record.pid) is a different process: its creation time differs by $([math]::Round($delta, 1)) seconds"
+        return $null
+    }
+
+    # -- proof 3: invocation and state-directory ownership, required ------
     $commandLine = $null
     try {
-        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction SilentlyContinue).CommandLine
+        $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($Record.pid)" -ErrorAction Stop).CommandLine
     } catch {
         $commandLine = $null
     }
-    if ($null -ne $commandLine -and $commandLine -notmatch 'jevmulator') {
-        Write-Verbose "Process $($Record.pid) command line does not name jevmulator; treating as an unrelated process."
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        $script:IdentityReason = "process $($Record.pid) cannot be verified: its command line is not readable"
+        return $null
+    }
+    if ($commandLine -notmatch '-m\s+jevmulator\s+serve') {
+        $script:IdentityReason = "process $($Record.pid) is not a jevmulator daemon: its command line does not invoke -m jevmulator serve"
+        return $null
+    }
+    if ($commandLine.IndexOf($StateDir, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        $script:IdentityReason = "process $($Record.pid) belongs to a different Jevmulator checkout: its command line does not name $StateDir"
         return $null
     }
 
@@ -306,7 +356,7 @@ function Invoke-Status {
 
     $process = Get-DaemonProcess -Record $record
     if ($null -eq $process) {
-        Write-Host "jevmulator: not running. The runtime file names process $($record.pid), which is gone or belongs to something else."
+        Write-Host "jevmulator: not running. Identity check refused: $script:IdentityReason."
         return 1
     }
 
@@ -352,8 +402,10 @@ function Invoke-Stop {
 
     $process = Get-DaemonProcess -Record $record
     if ($null -eq $process) {
-        Remove-StaleRuntime -Record $record -Reason "process $($record.pid) is gone or belongs to something else"
-        Write-Host 'jevmulator: not running.'
+        # Nothing is terminated. The runtime file is removed because it no longer names a
+        # process this checkout may act on.
+        Remove-StaleRuntime -Record $record -Reason $script:IdentityReason
+        Write-Host "jevmulator: nothing terminated. Identity check refused: $script:IdentityReason."
         return 0
     }
 
@@ -372,8 +424,8 @@ function Invoke-Stop {
         # Re-verify identity immediately before the forced stop.
         $stillOurs = Get-DaemonProcess -Record $record
         if ($null -eq $stillOurs) {
-            Write-Host 'jevmulator: the process is no longer ours. Nothing was terminated.'
-            Remove-StaleRuntime -Record $record -Reason 'identity check failed before terminating'
+            Write-Host "jevmulator: nothing terminated. Identity check refused just before the forced stop: $script:IdentityReason."
+            Remove-StaleRuntime -Record $record -Reason 'identity check refused before terminating'
             return 0
         }
         Stop-Process -Id $record.pid -Force -ErrorAction SilentlyContinue

@@ -38,7 +38,7 @@ explicitly labelled compatibility policy with attribution to the commit.
 | `GET /v1/models` | Pinned discovery endpoint. Success `ModelMetadataList`. |
 | `GET /_jevmulator/health` | Local operational route. Not part of the pinned surface. |
 | `GET /_jevmulator/status` | Local configuration summary without secrets. Not part of the pinned surface. |
-| `GET /_jevmulator/debug/upstream-calls` | Recorded upstream payloads. Only present when `JEVMULATOR_DEBUG_RECORD=1`. |
+| `GET /_jevmulator/debug/upstream-calls` | Recorded upstream payloads. Requires the bearer token. Only present when `JEVMULATOR_DEBUG_RECORD=1`. |
 
 The pinned paths keep the pinned bodies exactly. Every operational route sits under the
 `/_jevmulator/` prefix, so no pinned path is overloaded.
@@ -53,8 +53,14 @@ When `JEVMULATOR_API_KEY` is unset, the daemon generates a 32-byte random token 
 and writes it to the runtime state file `.jevmulator/runtime.json`. The daemon is therefore
 never unauthenticated. The comparison uses `hmac.compare_digest`.
 
-The operational routes under `/_jevmulator/` do not require the bearer token, because they
-must answer while the daemon is still starting. They never return a secret.
+`/_jevmulator/health` and `/_jevmulator/status` do not require the bearer token, because
+they must answer while the daemon is still starting and before a caller holds a key.
+Neither returns a secret or any caller content.
+
+`/_jevmulator/debug/upstream-calls` **does** require it, on both `GET` and `DELETE`. That
+recording holds the caller's state, the caller's instructions and the whole prompts, so it
+is at least as sensitive as the evaluate route. The check runs before the recording flag is
+consulted, so an unauthenticated caller does not learn whether recording is on.
 
 ## 4. Model aliases and identity
 
@@ -200,6 +206,16 @@ Headers sit outside the pinned body schema, so no consumer is affected by the si
 process. `JEVMULATOR_MAX_INFLIGHT_REQUESTS`, default 16, bounds simultaneous HTTP requests.
 `JEVMULATOR_UPSTREAM_TIMEOUT_SECONDS`, default 60, bounds one upstream call.
 `JEVMULATOR_REQUEST_TIMEOUT_SECONDS`, default 120, bounds the whole evaluation.
+`JEVMULATOR_INBOUND_TIMEOUT_SECONDS`, default 30, bounds how long a client may take to
+finish sending its request body.
+
+The inbound bound is separate from the others and is needed for a different reason. A
+client that opens a connection, declares a `Content-Length` and then stops sending never
+reaches the evaluator, so no evaluation deadline applies to it. Without an inbound bound
+that client holds one handler thread for as long as it chooses. `Handler.setup` sets a
+socket timeout, and both the body read and the drain loop run in bounded chunks under one
+overall deadline, so a client that trickles one byte at a time cannot reset the timeout
+forever. An incomplete body returns 408 and closes the connection.
 
 When the request deadline passes, remaining question futures are cancelled, running upstream
 sockets are closed by their own timeout, and the executor is not leaked. Server shutdown
@@ -218,9 +234,13 @@ PowerShell 5.1.
   message on failure.
 - The chosen port is remembered in the runtime file, so `status` and `stop` need no `-Port`.
   An explicit `-Port` still overrides.
-- `stop` verifies **both** the process id and the recorded process start time before
-  terminating, so a reused process id belonging to an unrelated process is never killed. A
-  stale runtime file is detected and removed.
+- `stop` and `status` act on a process only when three proofs all hold, and **fail closed**
+  when any one of them cannot be obtained. The process id must exist. The recorded creation
+  time must be present, must parse, and must match the live process within two seconds. The
+  command line must be readable, must invoke `-m jevmulator serve`, and must name this
+  checkout's state directory. A reused process id, an unverifiable process and a daemon
+  belonging to a different checkout are all refused, and the refusal reason is printed. A
+  stale runtime file is detected and removed without terminating anything.
 - An occupied port is detected before launch and reported, instead of producing a
   half-started daemon.
 - The background process starts with a hidden window and its output redirected to

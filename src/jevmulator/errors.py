@@ -96,6 +96,18 @@ class MaxTokensExceededError(RequestValidationError):
         return {"detail": {"error_type": "max_tokens_exceeded", "message": self.message}}
 
 
+class RequestTimeoutError(JevmulatorError):
+    """The client declared a body and did not finish sending it in time.
+
+    Without this the handler would block on a socket read for as long as the client
+    chose, which occupies one handler thread indefinitely and never reaches the
+    evaluation deadline.
+    """
+
+    status = 408
+    error_type = "request_timeout"
+
+
 class TooManyRequestsError(JevmulatorError):
     status = 429
     error_type = "too_many_requests"

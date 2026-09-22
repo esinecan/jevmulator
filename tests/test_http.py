@@ -157,11 +157,11 @@ class TestRouting:
         assert response.status == 200
 
     def test_the_debug_route_is_absent_unless_enabled(self) -> None:
+        """With a valid key and recording off, the route is simply not there."""
         with start_daemon(JEVMULATOR_PROVIDER="fake") as running:
-            response = running.client.request(
-                "GET", "/_jevmulator/debug/upstream-calls", api_key=None
-            )
+            response = running.client.request("GET", "/_jevmulator/debug/upstream-calls")
             assert response.status == 404
+            assert response.body["detail"]["error_type"] == "not_found"
 
 
 class TestBodyLimits:
@@ -387,3 +387,138 @@ class TestClientDisconnect:
         captured = capsys.readouterr()
         assert "Traceback" not in captured.err
         assert "ConnectionResetError" not in captured.err
+
+
+class TestDebugRouteRequiresAuth:
+    """The recording holds caller state, instructions and whole prompts.
+
+    An earlier version served it without any credential, so anyone who could reach the
+    loopback port could read every prompt the daemon had sent upstream.
+    """
+
+    def test_get_without_a_key_is_401(self, daemon) -> None:
+        response = daemon.client.request(
+            "GET", "/_jevmulator/debug/upstream-calls", api_key=None
+        )
+        assert response.status == 401
+        assert response.body["detail"]["error_type"] == "authentication_error"
+
+    def test_get_with_a_wrong_key_is_401(self, daemon) -> None:
+        response = daemon.client.request(
+            "GET", "/_jevmulator/debug/upstream-calls", api_key="not-the-key"
+        )
+        assert response.status == 401
+
+    def test_delete_without_a_key_is_401(self, daemon) -> None:
+        response = daemon.client.request(
+            "DELETE", "/_jevmulator/debug/upstream-calls", api_key=None
+        )
+        assert response.status == 401
+
+    def test_an_unauthenticated_reader_never_sees_a_prompt(self, daemon) -> None:
+        daemon.client.post_evaluate(MIXED_REQUEST)
+        response = daemon.client.request(
+            "GET", "/_jevmulator/debug/upstream-calls", api_key=None
+        )
+        assert response.status == 401
+        assert "Duplicate charge" not in json.dumps(response.body)
+
+    def test_the_authenticated_reader_does_see_them(self, daemon) -> None:
+        daemon.client.post_evaluate(MIXED_REQUEST)
+        calls = daemon.client.recorded_calls()
+        assert calls
+        assert "Duplicate charge" in json.dumps(calls)
+
+    def test_auth_is_checked_before_the_recording_flag(self) -> None:
+        """An unauthenticated caller learns nothing, not even whether recording is on."""
+        with start_daemon(JEVMULATOR_PROVIDER="fake", JEVMULATOR_DEBUG_RECORD="0") as running:
+            response = running.client.request(
+                "GET", "/_jevmulator/debug/upstream-calls", api_key=None
+            )
+            assert response.status == 401
+
+    def test_health_and_status_stay_open(self, daemon) -> None:
+        """Readiness polling must work before a caller holds a key."""
+        assert daemon.client.request("GET", "/_jevmulator/health", api_key=None).status == 200
+        assert daemon.client.request("GET", "/_jevmulator/status", api_key=None).status == 200
+
+
+class TestIncompleteRequestBody:
+    """A client that declares a body and never finishes must not hold a handler forever."""
+
+    def _send_partial(self, port: int, declared: int, sent: bytes, timeout: float):
+        import socket
+
+        raw = socket.create_connection(("127.0.0.1", port), timeout=timeout + 10)
+        raw.sendall(
+            b"POST /v1/systemone HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Authorization: Bearer " + TEST_API_KEY.encode() + b"\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(declared).encode() + b"\r\n"
+            b"\r\n" + sent
+        )
+        return raw
+
+    def test_an_incomplete_body_is_answered_with_408(self) -> None:
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake", JEVMULATOR_INBOUND_TIMEOUT_SECONDS="1"
+        ) as running:
+            raw = self._send_partial(running.port, 5000, b'{"model": "jev-la', timeout=1.0)
+            try:
+                raw.settimeout(20)
+                received = b""
+                while b"\r\n\r\n" not in received:
+                    chunk = raw.recv(4096)
+                    if not chunk:
+                        break
+                    received += chunk
+            finally:
+                raw.close()
+            assert b"408" in received.split(b"\r\n", 1)[0], received[:200]
+            assert b"request_timeout" in received
+
+    def test_the_daemon_serves_a_healthy_request_afterwards(self) -> None:
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake", JEVMULATOR_INBOUND_TIMEOUT_SECONDS="1"
+        ) as running:
+            raw = self._send_partial(running.port, 5000, b'{"model": "jev-la', timeout=1.0)
+            try:
+                raw.settimeout(20)
+                raw.recv(4096)
+            finally:
+                raw.close()
+
+            response = running.client.post_evaluate(MIXED_REQUEST)
+            assert response.status == 200
+            assert running.client.status().body["metrics"]["inflight"] == 0
+
+    def test_a_stalled_client_does_not_consume_the_inflight_budget(self) -> None:
+        """The stalled request never reaches the evaluator, so no slot is taken."""
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake",
+            JEVMULATOR_INBOUND_TIMEOUT_SECONDS="1",
+            JEVMULATOR_MAX_INFLIGHT_REQUESTS="1",
+        ) as running:
+            raw = self._send_partial(running.port, 5000, b"{", timeout=1.0)
+            try:
+                assert running.client.post_evaluate(MIXED_REQUEST).status == 200
+            finally:
+                raw.close()
+
+    def test_a_client_that_disconnects_mid_body_is_not_a_server_error(self) -> None:
+        import socket
+
+        with start_daemon(
+            JEVMULATOR_PROVIDER="fake", JEVMULATOR_INBOUND_TIMEOUT_SECONDS="2"
+        ) as running:
+            raw = socket.create_connection(("127.0.0.1", running.port), timeout=5)
+            raw.sendall(
+                b"POST /v1/systemone HTTP/1.1\r\nHost: x\r\n"
+                b"Content-Length: 4000\r\n\r\n" + b"x" * 10
+            )
+            raw.close()
+            assert running.client.post_evaluate(MIXED_REQUEST).status == 200
+
+    def test_the_inbound_timeout_is_reported_in_status(self, daemon) -> None:
+        assert daemon.client.status().body["config"]["inbound_timeout_seconds"] == 30.0

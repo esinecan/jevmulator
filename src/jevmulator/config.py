@@ -110,6 +110,7 @@ class Config:
 
     upstream_timeout_seconds: float = 60.0
     request_timeout_seconds: float = 120.0
+    inbound_timeout_seconds: float = 30.0
     upstream_retries: int = 2
     repair_retries: int = 1
     retry_backoff_seconds: float = 0.5
@@ -211,6 +212,7 @@ class Config:
             "max_output_tokens": self.max_output_tokens,
             "upstream_timeout_seconds": self.upstream_timeout_seconds,
             "request_timeout_seconds": self.request_timeout_seconds,
+            "inbound_timeout_seconds": self.inbound_timeout_seconds,
             "upstream_retries": self.upstream_retries,
             "repair_retries": self.repair_retries,
             "max_upstream_concurrency": self.max_upstream_concurrency,
@@ -328,6 +330,9 @@ def config_from_env(*, port: int | None = None, host: str | None = None) -> Conf
         ),
         request_timeout_seconds=_env_float(
             "JEVMULATOR_REQUEST_TIMEOUT_SECONDS", 120.0, 0.001
+        ),
+        inbound_timeout_seconds=_env_float(
+            "JEVMULATOR_INBOUND_TIMEOUT_SECONDS", 30.0, 0.001
         ),
         upstream_retries=_env_int("JEVMULATOR_UPSTREAM_RETRIES", 2, 0),
         repair_retries=_env_int("JEVMULATOR_REPAIR_RETRIES", 1, 0),
