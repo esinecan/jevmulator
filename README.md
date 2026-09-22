@@ -113,23 +113,37 @@ $env:JEVMULATOR_API_KEY = "local-dev-token"
 .\jevmulator.ps1 start
 
 # 4. Ask it something.
-$body = @'
-{
-  "model": "jev-latest",
-  "state": "I was charged twice for order 4417. Please refund one.",
-  "questions": {
-    "billing": { "type": "noul", "instructions": "Is this message about billing?" }
+$request = @{
+  model = 'jev-latest'
+  state = 'I was charged twice for order 4417. Please refund one.'
+  questions = @{
+    billing = @{ type = 'noul'; instructions = 'Is this message about billing?' }
   }
-}
-'@
-curl.exe -s -X POST http://127.0.0.1:8769/v1/systemone `
-  -H "Authorization: Bearer local-dev-token" `
-  -H "Content-Type: application/json" `
-  --data $body
+} | ConvertTo-Json -Depth 8
+
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8769/v1/systemone `
+  -Headers @{ Authorization = 'Bearer local-dev-token' } `
+  -ContentType 'application/json' -Body $request | ConvertTo-Json -Depth 8
 
 # 5. Stop it.
 .\jevmulator.ps1 stop
 ```
+
+> **Do not pass a JSON body inline to `curl.exe` from Windows PowerShell 5.1.** It removes
+> the double quotes before the program sees them, and the daemon answers 422
+> `json_invalid`. Use `Invoke-RestMethod` as above, or put the body in a file and pass
+> `--data "@request.json"`:
+>
+> ```powershell
+> $body = @'
+> {"model":"jev-latest","state":"I was charged twice.",
+>  "questions":{"billing":{"type":"noul","instructions":"Is this about billing?"}}}
+> '@
+> [System.IO.File]::WriteAllText("$PWD\request.json", $body, (New-Object System.Text.UTF8Encoding($false)))
+> curl.exe -s -X POST http://127.0.0.1:8769/v1/systemone `
+>   -H "Authorization: Bearer local-dev-token" `
+>   -H "Content-Type: application/json" --data "@request.json"
+> ```
 
 The answer looks like this:
 
@@ -198,7 +212,10 @@ python -m jevmulator serve --port 8769
 
 ## Calling it
 
-### curl
+### curl, from a POSIX shell
+
+On Windows PowerShell use `Invoke-RestMethod`, or a request file, as shown in the
+[quickstart](#quickstart).
 
 ```bash
 curl -s -X POST http://127.0.0.1:8769/v1/systemone \
@@ -309,9 +326,11 @@ is then read by its name alone.
 
 ## Model discovery
 
-```bash
-curl -s http://127.0.0.1:8769/v1/models -H "Authorization: Bearer local-dev-token"
+```powershell
+curl.exe -s http://127.0.0.1:8769/v1/models -H "Authorization: Bearer local-dev-token"
 ```
+
+A GET carries no body, so this form is safe in every shell.
 
 ```json
 {
@@ -597,6 +616,11 @@ You sent the wrong daemon token. Print the current one with
 **`422 Unknown model`**
 The name is not in `GET /v1/models`. Use `jev-latest`, or set
 `JEVMULATOR_UNKNOWN_MODEL=accept`.
+
+**`422 json_invalid` from a PowerShell `curl.exe` command**
+Windows PowerShell 5.1 removes the double quotes from an inline JSON argument before
+`curl.exe` sees it. Use `Invoke-RestMethod`, or write the body to a file and pass
+`--data "@request.json"`. Both forms are in the [quickstart](#quickstart).
 
 **`502 upstream_invalid_output`**
 The model did not return a usable distribution, even after a corrective re-ask. Raise
