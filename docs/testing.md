@@ -246,8 +246,8 @@ an object that fails is rejected, repaired within the retry bound, or turned int
 The README quickstart was executed against a fresh `git clone` of the tested commit, into a
 directory separate from the working tree, with only `ZAI_API_KEY` and `JEVMULATOR_API_KEY`
 set. The commands run were exactly those in the README: `.\jevmulator.ps1 start`, the
-`curl.exe` POST, `.\jevmulator.ps1 status`, and `.\jevmulator.ps1 stop`. The results are in
-[the quickstart section below](#clean-clone-quickstart-transcript).
+`curl.exe` POST, `.\jevmulator.ps1 status`, and `.\jevmulator.ps1 stop`. The transcript is in
+[Clean clone quickstart transcript](#clean-clone-quickstart-transcript).
 
 ## What the tests do not establish
 
@@ -267,4 +267,103 @@ set. The commands run were exactly those in the README: `.\jevmulator.ps1 start`
 
 ## Clean clone quickstart transcript
 
-See the section appended at the end of this file after the release review.
+The repository was cloned into `%TEMP%\jevmulator clean clone`, a directory whose path
+contains a space. Only `ZAI_API_KEY` and `JEVMULATOR_API_KEY` were set. The commands are the
+ones the README gives.
+
+### Install and packaging
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]" -c constraints-dev.txt
+# exit 0
+
+.\.venv\Scripts\jevmulator.exe --version
+# jevmulator 0.1.0
+
+cd tests\js; npm ci
+# added 1 package in 1s
+
+.\.venv\Scripts\python.exe -m pytest tests/ -q -m "not windows and not live"
+# 339 passed, 1 skipped, 27 deselected in 27.65s
+```
+
+Wheel build, then installation into a separate empty virtual environment:
+
+```powershell
+python -m build --wheel
+# Successfully built jevmulator-0.1.0-py3-none-any.whl  (47674 bytes)
+
+python -m pip install dist\jevmulator-0.1.0-py3-none-any.whl
+python -m pip list
+# Package    Version
+# ---------- -------
+# jevmulator 0.1.0
+# pip        25.2
+```
+
+The installed wheel pulls in nothing else. That is the zero-dependency runtime claim
+checked rather than asserted.
+
+### Quickstart, against live GLM Flash
+
+```powershell
+$env:JEVMULATOR_API_KEY = "local-dev-token"
+
+.\jevmulator.ps1 start
+# jevmulator: starting on port 8769 ...
+# jevmulator: ready on http://127.0.0.1:8769 as process 20104, upstream model glm-5.3-flash.
+# exit 0
+```
+
+The `Invoke-RestMethod` form returned:
+
+```json
+{
+  "model": "jevmulator-0.1.0-glm-5.3-flash",
+  "answers": { "billing": { "type": "noul", "noul": 1.0 } },
+  "usage": { "input_tokens": 132, "output_tokens": 14 }
+}
+```
+
+The request-file form with `curl.exe` returned:
+
+```json
+{"model": "jevmulator-0.1.0-glm-5.3-flash",
+ "answers": {"billing": {"type": "noul", "noul": 0.95}},
+ "usage": {"input_tokens": 121, "output_tokens": 14}}
+```
+
+```powershell
+curl.exe -s http://127.0.0.1:8769/v1/models -H "Authorization: Bearer local-dev-token"
+# four models listed, every description naming glm-5.3-flash
+
+.\jevmulator.ps1 status -ShowKey
+# ready             : True
+# upstream model    : glm-5.3-flash
+# reported model    : jevmulator-0.1.0-glm-5.3-flash
+# api key           : local-dev-token
+
+.\jevmulator.ps1 stop
+# jevmulator: stopped.                        exit 0
+
+.\jevmulator.ps1 stop
+# jevmulator: not running. No runtime file.   exit 0
+```
+
+### Two more defects the clean clone found
+
+**10. The hand-written dependency lock did not install.**
+`constraints-dev.txt` pinned `rpds-py==0.22.3`, which publishes no wheel for Python 3.14. A
+clean virtual environment tried to build it from source and failed with `Failed building
+wheel for rpds-py`. Those transitive pins were written by hand rather than generated. The
+file is now a real freeze of a resolution performed on this interpreter, and it records the
+command that regenerates it.
+
+**11. The README quickstart did not work on this host.**
+It passed a JSON body inline to `curl.exe`. Windows PowerShell 5.1 removes the double quotes
+before the program sees them, and the daemon answered `422` with
+`{"loc": ["body"], "msg": "JSON decode error: Expecting property name enclosed in double
+quotes...", "type": "json_invalid"}`. The quickstart now uses `Invoke-RestMethod`, with a
+request-file form as the alternative. Both were executed above and both returned 200. A
+troubleshooting entry in the README names the failure.
