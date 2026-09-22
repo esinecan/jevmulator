@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "ModelMetadata": {
+      "description": "Metadata describing a single available model.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "release_date": {
+          "title": "Release Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "release_date"
+      ],
+      "title": "ModelMetadata",
+      "type": "object"
+    }
+  },
+  "description": "The models available to the account.",
+  "properties": {
+    "models": {
+      "items": {
+        "$ref": "#/$defs/ModelMetadata"
+      },
+      "title": "Models",
+      "type": "array"
+    }
+  },
+  "required": [
+    "models"
+  ],
+  "title": "ListModelsResponse",
+  "type": "object"
+}

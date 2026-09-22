@@ -1,0 +1,19 @@
+# Exact pins for the development and test environment.
+#   python -m pip install -e ".[dev]" -c constraints-dev.txt
+#
+# The runtime itself has no third-party dependencies; everything here is test-only.
+pytest==8.3.4
+jsonschema==4.23.0
+
+# The pinned official TypeSafe client. The contract snapshot pins version 0.7.1 at
+# commit 0ffd094c72ed9445223060b24ffd7a56aa781fb4.
+typesafe-sdk==0.7.1
+
+# Transitive pins, so a clean environment resolves to the same tree.
+attrs==24.3.0
+iniconfig==2.0.0
+jsonschema-specifications==2024.10.1
+packaging==24.2
+pluggy==1.5.0
+referencing==0.36.2
+rpds-py==0.22.3

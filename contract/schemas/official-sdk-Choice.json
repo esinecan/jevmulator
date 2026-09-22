@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "JSONContent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "JSONValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "description": "A question that selects between named alternatives.\n\nSee the [choice primitive](https://docs.typesafe.ai/primitives/choice) for details.",
+  "properties": {
+    "type": {
+      "const": "choice",
+      "default": "choice",
+      "title": "Type",
+      "type": "string"
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JSONContent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "criteria": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JSONContent"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Criteria",
+      "type": "object"
+    }
+  },
+  "required": [
+    "criteria"
+  ],
+  "title": "Choice",
+  "type": "object"
+}

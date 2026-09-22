@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "JSONContent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "JSONValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "NoulCriteria": {
+      "additionalProperties": false,
+      "description": "Optional descriptions of the yes and no outcomes.\n\nSee the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.",
+      "properties": {
+        "true": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JSONContent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "false": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JSONContent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "NoulCriteria",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A yes/no question with optional descriptions for either outcome.\n\nSee the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.",
+  "properties": {
+    "type": {
+      "const": "noul",
+      "default": "noul",
+      "title": "Type",
+      "type": "string"
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JSONContent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "criteria": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NoulCriteria"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "Noul",
+  "type": "object"
+}

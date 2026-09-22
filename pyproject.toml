@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jevmulator"
+version = "0.1.0"
+description = "Local daemon serving the pinned TypeSafe Jev wire surface, backed by a configurable OpenAI-compatible model."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Eren Sinecan", email = "esinecan@gmail.com" }]
+keywords = ["typesafe", "jev", "system-one", "emulator", "glm"]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+# The runtime has no third-party dependencies on purpose. The whole daemon runs on the
+# standard library, so a clean clone starts without a package index.
+dependencies = []
+
+[project.optional-dependencies]
+# Pinned exactly. constraints-dev.txt holds the same pins for pip install -c.
+dev = [
+    "pytest==8.3.4",
+    "jsonschema==4.23.0",
+    "typesafe-sdk==0.7.1",
+]
+
+[project.scripts]
+jevmulator = "jevmulator.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/esinecan/jevmulator"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jevmulator"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/jevmulator",
+    "contract",
+    "docs",
+    "tests",
+    "jevmulator.ps1",
+    "README.md",
+    "LICENSE",
+    "NOTICES.md",
+    "constraints-dev.txt",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live: reaches the real upstream provider; skipped unless JEVMULATOR_LIVE_TESTS=1",
+    "windows: drives jevmulator.ps1 and needs Windows PowerShell",
+    "sdk: needs the pinned official TypeSafe SDK installed",
+    "js: needs Node and the pinned @typesafe-ai/sdk installed",
+]
+filterwarnings = ["error::DeprecationWarning:jevmulator.*"]

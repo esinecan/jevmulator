@@ -1,0 +1,24 @@
+{
+  "description": "A yes/no answer.\n\nSee the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.",
+  "properties": {
+    "type": {
+      "const": "noul",
+      "default": "noul",
+      "title": "Type",
+      "type": "string"
+    },
+    "noul": {
+      "description": "Probability of a yes answer or a true statement, from 0 to 1. Values near 1 favor yes or true, values near 0 favor no or false, and values near 0.5 indicate uncertainty.",
+      "examples": [
+        0.98
+      ],
+      "title": "Noul",
+      "type": "number"
+    }
+  },
+  "required": [
+    "noul"
+  ],
+  "title": "NoulAnswer",
+  "type": "object"
+}

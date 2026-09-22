@@ -1,0 +1,16 @@
+{
+  "name": "jevmulator-js-conformance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drives the pinned official TypeSafe JavaScript SDK against a running Jevmulator daemon.",
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

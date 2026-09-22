@@ -1,0 +1,27 @@
+# Daemon runtime state, logs and the generated local API key.
+.jevmulator/
+*.log
+
+# Secrets. Only .env.example is tracked.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+
+# Test and evidence output that does not belong in the repository.
+test-output/
+live-evidence/

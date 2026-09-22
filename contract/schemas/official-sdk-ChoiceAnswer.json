@@ -1,0 +1,49 @@
+{
+  "description": "A selected label and its probabilities.\n\nSee the [choice primitive](https://docs.typesafe.ai/primitives/choice) for details.",
+  "properties": {
+    "type": {
+      "const": "choice",
+      "default": "choice",
+      "title": "Type",
+      "type": "string"
+    },
+    "choice": {
+      "description": "The name of the choice with the highest probability among the question's criteria.",
+      "examples": [
+        "angry"
+      ],
+      "title": "Choice",
+      "type": "string"
+    },
+    "confidence": {
+      "description": "Confidence in the selected choice, from 0 to 1. Higher values indicate greater certainty; use lower values to flag uncertain selections for review.",
+      "examples": [
+        0.9
+      ],
+      "title": "Confidence",
+      "type": "number"
+    },
+    "probabilities": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Probability of each choice in criteria, keyed by choice name, from 0 to 1. Shows how likely the alternatives are; values sum to approximately 1.",
+      "examples": [
+        {
+          "angry": 0.8,
+          "calm": 0.1,
+          "excited": 0.1
+        }
+      ],
+      "title": "Probabilities",
+      "type": "object"
+    }
+  },
+  "required": [
+    "choice",
+    "confidence",
+    "probabilities"
+  ],
+  "title": "ChoiceAnswer",
+  "type": "object"
+}

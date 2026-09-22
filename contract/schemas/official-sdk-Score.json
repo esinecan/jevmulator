@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "JSONContent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "JSONValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JSONValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "description": "A question that assigns a score using an ordered rubric.\n\nSee the [score primitive](https://docs.typesafe.ai/primitives/score) for details.",
+  "properties": {
+    "type": {
+      "const": "score",
+      "default": "score",
+      "title": "Type",
+      "type": "string"
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JSONContent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "criteria": {
+      "items": {
+        "$ref": "#/$defs/JSONContent"
+      },
+      "title": "Criteria",
+      "type": "array"
+    }
+  },
+  "required": [
+    "criteria"
+  ],
+  "title": "Score",
+  "type": "object"
+}
