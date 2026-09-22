@@ -1,7 +1,21 @@
 # Exact pins for the development and test environment.
+#
 #   python -m pip install -e ".[dev]" -c constraints-dev.txt
 #
-# The runtime itself has no third-party dependencies; everything here is test-only.
+# The runtime itself has no third-party dependencies. Everything here is test-only.
+#
+# These versions were resolved and installed on Python 3.14.0 on 2026-09-22 and then
+# frozen, rather than written by hand. An earlier hand-written list pinned
+# rpds-py==0.22.3, which publishes no wheel for Python 3.14 and failed to build from
+# source in a clean virtual environment.
+#
+# On an older interpreter some of these versions will not resolve. Install without the
+# -c flag in that case, and regenerate this file with:
+#
+#   python -m pip install "pytest==8.3.4" "jsonschema==4.23.0" "typesafe-sdk==0.7.1"
+#   python -m pip freeze > constraints-dev.txt
+
+# -- direct test dependencies -------------------------------------------
 pytest==8.3.4
 jsonschema==4.23.0
 
@@ -9,11 +23,24 @@ jsonschema==4.23.0
 # commit 0ffd094c72ed9445223060b24ffd7a56aa781fb4.
 typesafe-sdk==0.7.1
 
-# Transitive pins, so a clean environment resolves to the same tree.
-attrs==24.3.0
-iniconfig==2.0.0
-jsonschema-specifications==2024.10.1
-packaging==24.2
-pluggy==1.5.0
-referencing==0.36.2
-rpds-py==0.22.3
+# -- transitive, as resolved on Python 3.14.0 ---------------------------
+annotated-types==0.8.0
+anyio==4.15.1
+attrs==26.1.0
+colorama==0.4.6
+h11==0.16.0
+httpcore2==2.13.0
+httpx2==2.13.0
+idna==3.20
+iniconfig==2.3.0
+jsonschema-specifications==2025.9.1
+packaging==26.3
+pluggy==1.6.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+referencing==0.37.0
+rpds-py==2026.6.3
+tenacity==9.1.4
+truststore==0.10.4
+typing-inspection==0.4.4
+typing_extensions==4.16.0
