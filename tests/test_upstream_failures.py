@@ -12,6 +12,7 @@ import json
 import pytest
 
 from conftest import MIXED_REQUEST, chat_completion, start_daemon
+from jevmulator.evaluator import close_open_brackets
 
 NOUL_REQUEST = {
     "model": "jev-latest",
@@ -119,6 +120,42 @@ class TestHappyPath:
         received = upstream.script.received[0]
         assert received["headers"]["Authorization"] == "Bearer test-upstream-key"
         assert "test-upstream-key" not in json.dumps(received["body"])
+
+
+class TestUnclosedBrackets:
+    def test_a_77_option_answer_missing_its_last_brace_is_accepted(self, upstream_factory) -> None:
+        labels = [f"OPTION_{index}" for index in range(76)] + ["STOP"]
+        request = {
+            "model": "jev-latest",
+            "state": "Spell cat.",
+            "questions": {
+                "next": {"type": "choice", "criteria": {label: None for label in labels}}
+            },
+        }
+        probabilities = {label: 0.0 for label in labels}
+        probabilities["OPTION_2"] = 1.0
+        content = json.dumps({"answer": {"probabilities": probabilities}})[:-1]
+        upstream = upstream_factory([answer(content)])
+        with daemon_against(upstream, JEVMULATOR_REPAIR_RETRIES="0") as running:
+            response = running.client.post_evaluate(request)
+            assert response.status == 200
+            assert response.body["answers"]["next"]["choice"] == "OPTION_2"
+        assert len(upstream.script.received) == 1
+
+    @pytest.mark.parametrize(
+        ("text", "closed"),
+        [
+            ('{"a": {"b": 1}', '{"a": {"b": 1}}'),
+            ('{"a": [1, {"b": 2}', '{"a": [1, {"b": 2}]}'),
+            ('{"a": "}{"', '{"a": "}{"}'),
+            ('{"a": "\\"', '{"a": "\\"'),
+            ('{"a": 1}}', '{"a": 1}}'),
+            ('{"a": [1}', '{"a": [1}'),
+            ('{"a": 1}', '{"a": 1}'),
+        ],
+    )
+    def test_only_brackets_open_at_the_end_are_closed(self, text: str, closed: str) -> None:
+        assert close_open_brackets(text) == closed
 
 
 class TestMalformedUpstreamOutput:

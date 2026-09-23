@@ -37,6 +37,37 @@ def strip_code_fence(text: str) -> str:
     return text
 
 
+def close_open_brackets(text: str) -> str:
+    """Append the closing brackets a JSON text leaves open at its end.
+
+    z.ai's structured-output modes on glm-5.3-flash end a choice answer with 20 or more
+    options one ``}`` short, with ``finish_reason`` ``stop``. Only brackets still open at the
+    end are added. Text that ends inside a string, or closes a bracket it never opened, is
+    returned unchanged, so ``json.loads`` still rejects it.
+    """
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not stack or stack.pop() != char:
+                return text
+    if in_string or not stack:
+        return text
+    return text + "".join(reversed(stack))
+
+
 class AnswerRejected(Exception):
     """The upstream answer cannot be turned into a valid wire answer."""
 
@@ -296,7 +327,13 @@ class Evaluator:
         try:
             payload = json.loads(cleaned)
         except ValueError as exc:
-            raise AnswerRejected(f"the upstream answer was not valid JSON ({exc})") from exc
+            closed = close_open_brackets(cleaned)
+            if closed == cleaned:
+                raise AnswerRejected(f"the upstream answer was not valid JSON ({exc})") from exc
+            try:
+                payload = json.loads(closed)
+            except ValueError:
+                raise AnswerRejected(f"the upstream answer was not valid JSON ({exc})") from exc
         if not isinstance(payload, dict):
             raise AnswerRejected("the upstream answer was not a JSON object")
         return payload
