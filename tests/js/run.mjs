@@ -271,6 +271,34 @@ await check('an empty question map raises a validation error', async () => {
   assert(raised !== null, 'an empty question map must raise');
 });
 
+// sys1 mirrors the pinned routes under /sys1, so the SDK reaches it by base URL alone.
+const sys1Client = new TypeSafeClient({ apiKey, baseURL: `${baseURL}/sys1`, timeout: 120000 });
+
+await check('sys1 answers through a base URL with a path prefix', async () => {
+  const response = await sys1Client.systemOne({
+    state: STATE,
+    questions: {
+      billing: noul('Is this message about billing?'),
+      tone: choice('What is the tone?', { angry: 'upset', calm: null }),
+      urgency: score('How urgent?', ['later', 'now']),
+    },
+  });
+  assert(
+    response.model.startsWith('jevmulator-0.1.0-sys1-read-only-'),
+    `expected a sys1 identity, got ${response.model}`,
+  );
+  assert(response.answers.billing.type === 'noul', 'billing must be a noul answer');
+  assert(['angry', 'calm'].includes(response.answers.tone.choice), 'tone must pick an option');
+  assert(response.answers.urgency.type === 'score', 'urgency must be a score answer');
+});
+
+await check('sys1 model discovery lists the profiles', async () => {
+  const models = await sys1Client.models.list();
+  const names = models.map((model) => model.name);
+  assert(names.includes('jev-latest'), 'jev-latest must be listed on /sys1');
+  assert(names.includes('sys1-read-only'), 'the read-only profile must be listed');
+});
+
 const failed = results.filter((result) => !result.ok);
 console.log(
   JSON.stringify({

@@ -39,9 +39,12 @@ explicitly labelled compatibility policy with attribution to the commit.
 | `GET /_jevmulator/health` | Local operational route. Not part of the pinned surface. |
 | `GET /_jevmulator/status` | Local configuration summary without secrets. Not part of the pinned surface. |
 | `GET /_jevmulator/debug/upstream-calls` | Recorded upstream payloads. Requires the bearer token. Only present when `JEVMULATOR_DEBUG_RECORD=1`. |
+| `POST /sys1/v1/systemone`, `GET /sys1/v1/models` | The harnessed mode, section 15. The pinned bodies, under a prefix. |
+| `POST /_jevmulator/sys1/runs/<run_id>/hello` and `.../submission` | sys1's form. Only a running agent's own token is accepted. |
 
 The pinned paths keep the pinned bodies exactly. Every operational route sits under the
-`/_jevmulator/` prefix, so no pinned path is overloaded.
+`/_jevmulator/` prefix, so no pinned path is overloaded. `/sys1/` mirrors the pinned layout
+with the pinned bodies, so an official SDK reaches sys1 by changing only its base URL.
 
 ## 3. Authentication
 
@@ -296,3 +299,117 @@ The implementation brief at
 explicit authorization for this implementation, for GLM Flash backed testing, and for
 creating and pushing the private repository `esinecan/jevmulator`. This design introduces no
 further approval gate.
+
+## 15. sys1: the harnessed mode
+
+sys1 answers the pinned request with an agent run instead of one chat completion per
+question. The agent researches with the tools its profile grants, then submits a
+distribution for each question through a form. The bare path never imports the `sys1`
+package, and its readiness never depends on a harness.
+
+### 15.1 One run per request
+
+A request becomes one run. The agent sees its questions as `q1..qN` in request order
+(`sys1/form.py`, `alias_request`). The caller's IDs stay in memory while the run lives,
+and `record.json` receives the map only after the run's job is closed, so no agent process
+can read it. This keeps IDs out of model input. It does not keep sibling questions apart:
+one agent answers them all in one context, which is recorded in `compatibility.md`
+section 8.
+
+### 15.2 The form
+
+The form is the only way a verdict reaches the daemon (`sys1/form.py`,
+`validate_submission`). It checks the object shape, the exact labels, then each answer
+through `answers.py`, the same builders the bare path uses for an upstream answer. It adds
+one rule: a distribution whose sum is more than `JEVMULATOR_SYS1_MAX_SUM_ERROR` from 1 is
+rejected, with the sum in the message, so the agent can correct it. The limit carries a
+`1e-9` margin, because `[0.33, 0.33, 0.33]` has a floating-point error of
+`0.010000000000000009`. The form returns every problem at once; the builders stop at the
+first problem inside one answer. The agent never supplies a derived field.
+
+The rules live in the daemon, behind HTTP, so every harness gets the same checks. A
+harness only has to expose a tool that posts the agent's arguments unchanged.
+
+### 15.3 One outcome per run
+
+A run starts RUNNING and ends in exactly one of ACCEPTED, EXHAUSTED, NO_VERDICT,
+TIMED_OUT, STALLED, MISMATCH, CANCELLED or FAILED_TO_START (`sys1/runs.py`). The first
+transition wins, and a submission is validated and applied under the same lock, so two
+concurrent valid submissions produce one acceptance and one 409.
+
+A supervisor thread owns each run. It prepares the run directory, launches the harness,
+reads the harness's event file every 250 ms, and decides. Request handlers only wait. A
+harness that exits gets a 2-second grace for a submission already on its way before the
+run is declared NO_VERDICT.
+
+When the outcome is published, the run's slot is freed and the outcome becomes available
+for replay. Only then does the supervisor wait for the harness to exit
+(`JEVMULATOR_SYS1_EXIT_GRACE_SECONDS`) and close the job. A caller's next request
+therefore never waits for another program's cleanup.
+
+### 15.4 Coalescing
+
+A request is identified by SHA-256 over the resolved profile, the state and the
+questions, serialised without sorting keys: label order decides ties and the response's
+key order. An identical request attaches to the running run, or gets its published
+outcome again for 600 seconds after a success and 120 seconds after a failure. Errors
+raised before a run starts are never cached, and neither are CANCELLED and
+FAILED_TO_START, which say nothing about the request. The official Python SDK times out
+after 10 seconds and retries by default; with coalescing, none of those retries starts a
+second run.
+
+### 15.5 Containment
+
+Every process of a run lives in one Windows job object with `KILL_ON_JOB_CLOSE`
+(`sys1/jobs.py`). The root starts suspended, joins the job, and then resumes, so every
+process it starts is inside the job from its first instruction. `jevmulator.ps1 stop`
+ends a daemon that has not exited within 10 seconds with `Stop-Process -Force`, which
+runs no Python cleanup; the job still ends with the daemon's last handle.
+`tests/test_sys1_jobs.py` kills a real daemon with `TerminateProcess` and checks that the
+agent and its grandchild end. On POSIX a run is a process group; a hard kill of the daemon
+there leaves the group running.
+
+A harness child's environment is built from an allowlist, never by subtracting from the
+daemon's own. It holds system variables, `ZAI_API_KEY`, and the run's own variables. It
+never holds the daemon key. The daemon key is still in `.jevmulator/runtime.json` in plain
+text, so a read tool can reach it unless a profile's `read_roots` confines reads, and a
+shell profile can do anything the user can.
+
+A harness writes its events to a file, never to a pipe. The supervisor detects exit
+through the process handle, never through end-of-file, so a grandchild that inherits an
+output handle cannot hang the daemon, which was the lifecycle hang of 2026-09-22.
+
+### 15.6 The pi adapter
+
+pi runs through `node` on its own `dist/bundle/cli.js`, never the `pi.cmd` shim, so no
+argument passes through `cmd.exe`. The argument list is fixed and holds no caller text;
+the brief is a file and the first message is a constant (`sys1/harness/pi.py`).
+
+A default pi launch on this machine loads six packages, seventeen MCP servers, skills,
+`APPEND_SYSTEM.md`, and `%USERPROFILE%\AGENTS.md` through the upward context-file search,
+on the default model `deepseek/deepseek-flash`. The adapter therefore passes
+`--no-extensions`, `--no-skills`, `--no-context-files`, `--no-prompt-templates`,
+`--no-themes`, `--no-approve` and `--offline`, names the provider and the model, and runs
+with a private `PI_CODING_AGENT_DIR` whose `settings.json` has no packages. `--tools` is a
+hard allowlist over built-in and extension tools, so it names the profile's tools plus
+`submit_verdict`. pi's sessions go to the run directory, never to the user's pi store.
+
+The judge extension, `sys1/harness/pi_judge.ts`, registers `submit_verdict`, posts
+`hello` with `pi.getActiveTools()` and the model before the first model call, nudges an
+agent that stops without a verdict, confines `write` and `edit` to the work directory,
+confines reads to a profile's `read_roots` when it sets them, and bounds `bash` to 120
+seconds. In a shell profile it replaces `bash` with one whose working directory is the
+work directory and whose environment has no keys or tokens. The daemon ends a run whose
+`hello` or whose model events differ from the profile, with `sys1_harness_mismatch`.
+
+pi's exit code is not a signal: in JSON mode it is 0 even when the model call failed. The
+supervisor decides from the form, the events and the process handle.
+
+### 15.7 Tests
+
+The fake harness (`sys1/harness/fake.py`, `sys1/fake_agent.py`) is a real child process
+in a real job that speaks the real protocol, with a scripted judgment. The HTTP suite runs
+every outcome, the races, coalescing, the form's authentication, containment and
+isolation against it. `tests/test_sys1_pi_adapter.py` checks pi's command line and
+environment without running pi. Live runs of pi are hand tests, recorded in
+`docs/testing.md`.

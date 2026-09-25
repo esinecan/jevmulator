@@ -59,6 +59,20 @@ is vendored.
 - `typesafe-sdk==0.7.1` from PyPI, pinned at commit `0ffd094c72ed9445223060b24ffd7a56aa781fb4`
 - `@typesafe-ai/sdk@0.6.0` from npm, pinned at commit `66880ccded6cb642dc1809620c2b108c33730214`
 
+## Process containment for sys1
+
+`src/jevmulator/sys1/jobs.py` ports the kill-on-close job-object pattern (start suspended,
+assign to the job, resume with `NtResumeProcess`) from the `Job` class in Eren Sinecan's
+own `agent-personal-space/experiments/tui-mcp-eval-2026-09-22/bundle/core.py`. The port
+drops that class's `psutil` dependency: the job's process list and active-process count
+are read with `QueryInformationJobObject` instead.
+
+## pi
+
+sys1's first harness is the `pi` coding agent (`@earendil-works/pi-coding-agent`), which
+the daemon runs as an installed program. No pi file is vendored. `pi_judge.ts` is this
+project's own extension, written against pi 0.85.1's extension API.
+
 ## Name
 
 "TypeSafe" and "Jev" are the provider's names. This project is an independent emulator of

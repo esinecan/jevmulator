@@ -97,3 +97,5 @@ class TestJavaScriptSdk:
         assert "a mixed batch round trips" in completed.stdout
         assert "model discovery lists the catalogue" in completed.stdout
         assert "structured instructions and criteria survive" in completed.stdout
+        assert "sys1 answers through a base URL with a path prefix" in completed.stdout
+        assert "sys1 model discovery lists the profiles" in completed.stdout

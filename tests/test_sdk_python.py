@@ -234,6 +234,36 @@ class TestSdkIsolation:
         assert question_id not in json.dumps(running.client.recorded_calls())
 
 
+class TestSdkSys1:
+    """sys1 mirrors the pinned routes under /sys1, so only the base URL changes."""
+
+    def test_the_sys1_path_answers_through_a_base_url_with_a_prefix(self) -> None:
+        with start_daemon(JEVMULATOR_PROVIDER="fake") as running:
+            client = typesafe_sdk.TypeSafeClient(
+                api_key=running.client.api_key,
+                base_url=running.client.base_url + "/sys1",
+                timeout=120,
+                retry=typesafe_sdk.RetryPolicy(max_retries=0),
+            )
+            response = client.system_one(
+                state=STATE,
+                questions={
+                    "billing": typesafe_sdk.Noul(instructions="Is this about billing?"),
+                    "tone": typesafe_sdk.Choice(
+                        instructions="What is the tone?", criteria={"angry": "upset", "calm": None}
+                    ),
+                    "urgency": typesafe_sdk.Score(
+                        instructions="How urgent is this?", criteria=["later", "now"]
+                    ),
+                },
+            )
+            assert response.model.startswith("jevmulator-0.1.0-sys1-read-only-")
+            assert set(response.answers) == {"billing", "tone", "urgency"}
+            assert response.answers["tone"].choice in ("angry", "calm")
+            names = [model.name for model in client.models.list().models]
+            assert "sys1-read-only" in names
+
+
 class TestSdkErrorHandling:
     def test_a_bad_key_raises(self) -> None:
         with start_daemon(JEVMULATOR_PROVIDER="fake") as running:

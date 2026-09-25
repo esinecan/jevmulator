@@ -31,6 +31,13 @@ These hold for every successful response, and the test suite checks each one.
     `answers` object and no invented distribution.
 11. No question ID, no sibling question and no sibling answer reaches the upstream model.
 
+Guarantees 1 to 10 hold on both `/v1/systemone` and `/sys1/v1/systemone`. Guarantee 11 holds
+only on `/v1/systemone`. On `/sys1`, one agent answers every question of a request in one
+context, so sibling questions and the agent's own earlier answers are in its view. What
+still holds there: no caller question ID reaches the agent, which sees the opaque labels
+`q1..qN`, and the map back to the IDs is written to disk only after the agent's processes
+have ended. Section 8 records the rest of what sys1 changes.
+
 ---
 
 ## 2. Decisions Jevmulator makes, which TypeSafe has not published
@@ -223,3 +230,33 @@ Jevmulator does not follow TypeSafe's documentation as it changes, and it does n
 
 `tests/test_schema_conformance.py::TestPinnedBundle` re-hashes the snapshot on every run, so
 an edit that skips this procedure fails the suite.
+
+
+---
+
+## 8. What sys1 changes
+
+`/sys1/v1/systemone` accepts and returns the pinned bodies. What produces the numbers
+differs from both Jev and the bare path.
+
+- **The judgment comes from an agent run.** A pi agent on `zai/glm-5.3-flash` reads files,
+  and in `prototype-first` runs code, before it submits distributions. Its numbers say what
+  that agent concluded after research. They are not Jev's and not a bare model's.
+- **Questions share one context.** One run answers every question of a request, so the
+  answers can influence each other. The bare path's guarantee 11 does not hold here.
+- **Question IDs stay out.** The agent sees `q1..qN` in request order.
+- **Derived fields are the daemon's.** The agent submits distributions only. `choice`,
+  `score`, `confidence` and `legend` come from the same code as the bare path.
+- **The sum limit is stricter.** The form rejects a distribution whose sum is more than
+  `JEVMULATOR_SYS1_MAX_SUM_ERROR` (0.01) from 1, and lets the agent correct it. Inside the
+  limit, rescaling follows `JEVMULATOR_NORMALIZE_PROBABILITIES` as on the bare path.
+- **Latency is minutes.** Jev answers in about 200 ms; a sys1 run takes as long as the
+  agent's research, up to the run timeout.
+- **Usage counts the agent's model calls.** `usage` sums the tokens pi reports for every
+  model call of the run: input plus cache reads and writes, and output. A call reported
+  with no count, or with a count of zero, marks the usage partial; nothing is invented.
+- **Identical requests share one run.** Same profile, state and questions in the same
+  order attach to the run in progress or get its outcome again for a while. Jev answers
+  each request separately.
+- **Model names are sys1's.** `GET /sys1/v1/models` lists profiles, and every response
+  names the profile, the harness and the harness model in `model`.

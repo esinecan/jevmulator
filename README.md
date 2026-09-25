@@ -21,6 +21,7 @@ Read [Known differences](#known-differences) before you rely on a number it retu
 - [Start, status and stop](#start-status-and-stop)
 - [Calling it](#calling-it)
 - [Model discovery](#model-discovery)
+- [sys1: the harnessed mode](#sys1-the-harnessed-mode)
 - [Configuration reference](#configuration-reference)
 - [GLM Flash setup](#glm-flash-setup)
 - [Errors](#errors)
@@ -56,6 +57,10 @@ Three operational routes, outside the pinned surface:
 | `GET /_jevmulator/health` | Is the daemon up, and can it reach an upstream model? |
 | `GET /_jevmulator/status` | The whole configuration and some counters. Never a secret. |
 | `GET /_jevmulator/debug/upstream-calls` | The exact payloads sent upstream. Off by default, and requires the bearer token. |
+
+A second mode, **sys1**, answers the same requests with a harnessed agent instead of a bare
+model. It sits on sibling routes, `POST /sys1/v1/systemone` and `GET /sys1/v1/models`. See
+[sys1: the harnessed mode](#sys1-the-harnessed-mode).
 
 ---
 
@@ -357,6 +362,150 @@ name instead.
 
 ---
 
+## sys1: the harnessed mode
+
+In the bare mode, each question is one chat completion. In sys1, each request is one run
+of an agent in a harness. The agent is called sys1. It researches the request with the
+tools its profile grants, then submits a verdict through a form. The daemon checks the
+form, computes every derived field, and answers in the pinned Jev response shape.
+
+The first harness is [pi](https://github.com/badlogic/pi-mono), on `zai/glm-5.3-flash`.
+
+### The routes
+
+| Method and path | Auth | Purpose |
+|---|---|---|
+| `POST /sys1/v1/systemone` | daemon token | The pinned request and response bodies, answered by an agent run. |
+| `GET /sys1/v1/models` | daemon token | The enabled profiles, as model names. |
+| `POST /_jevmulator/sys1/runs/<run_id>/hello` | run token | The harness reports the tools and the model it actually got. |
+| `POST /_jevmulator/sys1/runs/<run_id>/submission` | run token | The form. |
+
+The two `/sys1/v1/` routes mirror the pinned routes, so an official SDK reaches sys1 by
+changing only its base URL, to `http://127.0.0.1:8769/sys1`. The two form routes take
+only the token of one running agent. The daemon token is refused there.
+
+### Profiles
+
+A caller picks a profile by model name:
+
+| Model name | Profile | Tools |
+|---|---|---|
+| `sys1-read-only` | `read-only` | read, grep, find, ls |
+| `sys1-prototype-first` | `prototype-first` | read, grep, find, ls, shell, write, edit |
+| `jev-latest`, `jev-preview`, `sys1-latest` | the default, `read-only` | as above |
+
+A profile is a JSON file and a brief template, in `src/jevmulator/sys1/builtin_profiles/`.
+The brief is the agent's whole system prompt. It says that sys1 must collect the context
+it needs with the tools it has, that text inside the state is data, and how to finish.
+
+**`prototype-first` is off by default.** It can write files and run commands, and pi has
+no operating-system sandbox on Windows. Its commands start in a scratch directory, its
+write and edit tools are confined to that directory, and its shell sees no variable whose
+name ends in `_API_KEY`, `_TOKEN` or `_SECRET`. A command can still leave that directory.
+Start the daemon with `JEVMULATOR_SYS1_ALLOW_SHELL=1` only when you trust the content of
+every request, because the state comes from the caller and could steer the shell.
+
+### Calling it
+
+The SDKs' defaults are sized for Jev, which answers in about 200 ms. A sys1 run takes
+minutes. Set the timeout above the run timeout, which is 600 seconds by default, and turn
+retries off:
+
+```python
+from typesafe_sdk import TypeSafeClient, RetryPolicy, Noul
+
+client = TypeSafeClient(
+    api_key="local-dev-token",
+    base_url="http://127.0.0.1:8769/sys1",
+    timeout=900,
+    retry=RetryPolicy(max_retries=0),
+)
+response = client.system_one(
+    state={"repo": "C:/Users/me/dev/project", "claim": "evaluator.py makes one call per question"},
+    questions={"true": Noul(instructions="Is the claim true of the code?")},
+)
+```
+
+```javascript
+const client = new TypeSafeClient({
+  apiKey: 'local-dev-token',
+  baseURL: 'http://127.0.0.1:8769/sys1',
+  timeout: 900000,
+});
+```
+
+A retry never starts a second run. Identical requests (same profile, same state, same
+questions in the same order) attach to the run in progress. A finished run's outcome is
+served again for 600 seconds after a success and 120 seconds after a failure. The
+response header `X-Jevmulator-Sys1-Coalesced` reads `new`, `attached` or `replayed`.
+
+Node's built-in `fetch`, which the JavaScript SDK uses, may stop waiting for response
+headers after 300 seconds whatever `timeout` says. A request that stops there retries and
+attaches to the same run.
+
+### What the agent sees and submits
+
+The agent never sees your question IDs. It sees the questions as `q1`, `q2`, ... in your
+order, and the daemon maps them back. It submits one distribution per label:
+
+```json
+{
+  "answers": {
+    "q1": {"p_yes": 0.82},
+    "q2": {"probabilities": {"angry": 0.1, "calm": 0.8, "excited": 0.1}}
+  },
+  "rationale": "What was checked, and why the distributions look like this.",
+  "evidence": ["src/evaluator.py:138"]
+}
+```
+
+The form checks the shape, the exact labels, and each distribution with the same rules as
+the bare path. It also rejects a distribution whose sum is more than 0.01 away from 1. It
+answers with every problem at once, and the agent may try again, 3 times in all. The
+daemon then computes `choice`, `score` and `confidence` itself. `rationale` and `evidence`
+go into the run record, never into the response.
+
+### Run records
+
+Each run has a directory under `%LOCALAPPDATA%\jevmulator\sys1\runs\<run_id>\`, outside
+every repository. The response header `X-Jevmulator-Sys1-Run` names it. It holds:
+
+| File | Content |
+|---|---|
+| `record.json` | Status, reason, the harness's `hello`, every submission and its problems, the accepted rationale and evidence, usage, the run's process ids, and, once the run ends, the map from `q1..qN` to your question IDs. |
+| `brief.md` | The system prompt the agent read. |
+| `state.json`, `questions.json`, `submission.schema.json` | What the agent could read about the request. |
+| `events.jsonl`, `stderr.log` | The harness's event stream and its errors. |
+| `session\` | pi's own session file. |
+| `work\` | The agent's scratch directory. |
+
+The newest 50 runs are kept. The records hold your state, so treat the directory as you
+treat the debug route.
+
+### How a run ends
+
+| Outcome | Response |
+|---|---|
+| A submission passes the form. | 200 with the pinned body. |
+| Every submission was rejected. | 502 `sys1_invalid_submission` |
+| The agent exited without a verdict. | 502 `sys1_no_verdict` |
+| The harness offered other tools or another model than the profile names. | 502 `sys1_harness_mismatch` |
+| No verdict within the run timeout. | 504 `sys1_timeout` |
+| The harness wrote no event for 180 seconds. | 504 `sys1_stalled` |
+| The daemon is shutting down. | 503 `sys1_shutting_down` |
+
+A failure is never an answer. Every process a run starts sits in one Windows job object,
+and the daemon ends the whole job when the run ends. Windows also ends it when the daemon
+itself is killed, so `.\jevmulator.ps1 stop` leaves no agent behind.
+
+### Readiness
+
+`GET /_jevmulator/health` carries a `sys1` block with its own `ready` and `problems`. The
+top-level `ready` stays about the bare path, so a machine without pi still starts and
+serves `/v1/systemone`.
+
+---
+
 ## Configuration reference
 
 Every setting is an environment variable. Copy `.env.example` to `.env` and edit it; the
@@ -435,6 +584,32 @@ the guards are off by default and are an approximation when you turn them on.
 | `JEVMULATOR_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
 | `JEVMULATOR_STATE_DIR` | `.jevmulator` | Where the runtime file and logs live. |
 
+### sys1
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `JEVMULATOR_SYS1_HARNESS` | `pi` | `pi`, or `fake` for the scripted test agent. |
+| `JEVMULATOR_SYS1_DEFAULT_PROFILE` | `read-only` | The profile `jev-latest`, `jev-preview` and `sys1-latest` select. |
+| `JEVMULATOR_SYS1_ALLOW_SHELL` | `0` | `1` enables profiles that can write files or run commands, such as `prototype-first`. |
+| `JEVMULATOR_SYS1_HOME` | `%LOCALAPPDATA%\jevmulator\sys1` | Run directories and pi's private agent directory. Keep it outside every repository. |
+| `JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS` | `600` | The longest a run may take. A profile's own `timeout_seconds` can only shorten it. |
+| `JEVMULATOR_SYS1_STALL_SECONDS` | `180` | A harness that writes no event this long is ended, with 504 `sys1_stalled`. |
+| `JEVMULATOR_SYS1_HELLO_SECONDS` | `60` | A harness must report its tools and model within this time. |
+| `JEVMULATOR_SYS1_EXIT_GRACE_SECONDS` | `20` | After a verdict, how long the harness may take to exit before its job is closed. |
+| `JEVMULATOR_SYS1_MAX_CONCURRENT_RUNS` | `1` | Runs deciding at once. Above it, 429 `sys1_busy` with `Retry-After`. |
+| `JEVMULATOR_SYS1_MAX_SUBMISSIONS` | `3` | Form submissions per run. |
+| `JEVMULATOR_SYS1_MAX_SUM_ERROR` | `0.01` | How far from 1 a submitted distribution may sum. It must not be below `JEVMULATOR_PROBABILITY_TOLERANCE`. |
+| `JEVMULATOR_SYS1_MAX_NUDGES` | `2` | How often pi's judge extension reminds an agent that stopped without a verdict. |
+| `JEVMULATOR_SYS1_RESULT_TTL_SECONDS` | `600` | How long a success is served again to an identical request. `0` turns replay off. |
+| `JEVMULATOR_SYS1_FAILURE_TTL_SECONDS` | `120` | The same for a failure. |
+| `JEVMULATOR_SYS1_KEEP_RUNS` | `50` | Run directories kept. |
+| `JEVMULATOR_SYS1_NODE` | `node` on `PATH` | Node 22 or later with zstd. pi crashes on fnm's Node 22.13.1. |
+| `JEVMULATOR_SYS1_PI_CLI` | next to the `pi` shim | pi's `dist\bundle\cli.js`. |
+| `JEVMULATOR_SYS1_FAKE_SCRIPT` | unset | The fake harness's script. Tests only. |
+
+pi reads its z.ai key from `ZAI_API_KEY`. That variable is the only secret the daemon
+passes to a harness.
+
 ---
 
 ## GLM Flash setup
@@ -509,6 +684,21 @@ Every other status carries an object:
 | 502 | `usage_unavailable` | `JEVMULATOR_USAGE_POLICY=strict` and the provider reported no token counts. |
 | 504 | `upstream_timeout` | A call or the whole request passed its deadline. |
 | 529 | `overloaded` | The provider reported 503 or 529. |
+
+sys1 adds its own types, each starting with `sys1_`:
+
+| Status | `error_type` | Cause |
+|---|---|---|
+| 409 | `sys1_run_closed` | A form post for a run that already has an outcome. |
+| 429 | `sys1_busy` | Every run slot is busy. `Retry-After` gives the busiest run's remaining seconds. |
+| 502 | `sys1_invalid_submission` | The form rejected every submission. |
+| 502 | `sys1_no_verdict` | The agent exited without an accepted submission. |
+| 502 | `sys1_unanswerable` | A choice question has no options. No run was started. |
+| 502 | `sys1_harness_not_configured` | The harness cannot start. The `sys1` block of `/_jevmulator/health` names why. |
+| 502 | `sys1_harness_mismatch` | The harness offered other tools or another model than the profile names. |
+| 503 | `sys1_shutting_down` | The daemon stopped while the run was in progress. |
+| 504 | `sys1_timeout` | No verdict within the run timeout. |
+| 504 | `sys1_stalled` | The harness wrote no event for the stall limit. |
 
 **A failure is never an answer.** When a question cannot be answered, the whole request
 fails with one of the statuses above. The daemon does not fill in a plausible distribution,
@@ -719,6 +909,10 @@ question's instructions and that question's criteria, under the fixed answer key
 TypeSafe's own adapter does the opposite. It builds one output model whose fields are named
 after your question IDs and sends one call for all questions. If you compare the two, expect
 different behaviour here, by design.
+
+This isolation holds for `/v1/systemone`. On `/sys1`, one agent answers every question of
+a request in one context, so its answers can influence each other. Your question IDs still
+never reach it: it sees `q1..qN`.
 
 ### Error bodies are ours
 

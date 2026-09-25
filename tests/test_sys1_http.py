@@ -515,6 +515,25 @@ class TestContainment:
             assert pending.result(timeout=60).status == 504
             wait_for(lambda: not pid_alive(pid), what="the grandchild to end")
 
+    def test_the_record_names_the_processes_while_the_run_lives(self, tmp_path):
+        # A daemon killed mid-run writes no final record, so the running record must
+        # already name every process a tester has to check.
+        steps = [{"do": "grandchild", "seconds": 600}, {"do": "busy", "seconds": 30}]
+        with daemon(tmp_path, steps, JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS="6") as running, ThreadPoolExecutor(1) as pool:
+            pending = pool.submit(sys1, running)
+            pid = grandchild_pid(running)
+            record_path = run_dirs(running)[0] / "record.json"
+
+            def listed():
+                try:
+                    record = json.loads(record_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return False
+                return record["status"] == "RUNNING" and pid in {p["pid"] for p in record["processes"]}
+
+            wait_for(listed, what="the running record to name the grandchild")
+            assert pending.result(timeout=60).status == 504
+
     def test_an_orphaned_grandchild_is_ended(self, tmp_path):
         steps = [{"do": "grandchild", "seconds": 600}, {"do": "exit", "code": 0}]
         with daemon(tmp_path, steps) as running:

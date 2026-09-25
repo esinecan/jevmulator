@@ -317,6 +317,9 @@ class Run:
             try:
                 self._prepare()
                 self.process = self.harness.launch(self._launch_spec())
+                # The record names the run's processes from the start, so a daemon that is
+                # killed mid-run still leaves a record anyone can check them against.
+                self.write_record()
             except Exception as exc:  # noqa: BLE001 - any launch failure ends the run
                 LOGGER.warning("sys1 run %s could not start: %s", self.run_id, exc)
                 self.transition(RunState.FAILED_TO_START, f"the harness could not start: {exc}")
@@ -404,8 +407,11 @@ class Run:
                 last_event = now
                 self._absorb(event)
             if now - last_observe >= OBSERVE_EVERY_SECONDS:
+                known = len(self.process.job.observed())
                 self.process.job.observe()
                 last_observe = now
+                if len(self.process.job.observed()) != known:
+                    self.write_record()
             if self.state is not RunState.RUNNING:
                 return
             if self.hello_at is None and now - self.started >= self.settings.hello_seconds:
