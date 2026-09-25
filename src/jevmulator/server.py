@@ -22,12 +22,20 @@ from .config import Config
 from .evaluator import Evaluator
 from .providers import build_provider
 from .providers.base import UpstreamCall
+from .sys1.service import Sys1Service
 
 LOGGER = logging.getLogger("jevmulator")
 
 PINNED_EVALUATE_PATH = "/v1/systemone"
 PINNED_MODELS_PATH = "/v1/models"
 OPERATIONAL_PREFIX = "/_jevmulator/"
+
+#: The harnessed mode mirrors the pinned layout under ``/sys1``, with the pinned bodies, so
+#: an official SDK reaches it by changing only its base URL.
+SYS1_EVALUATE_PATH = "/sys1" + PINNED_EVALUATE_PATH
+SYS1_MODELS_PATH = "/sys1" + PINNED_MODELS_PATH
+SYS1_RUNS_PREFIX = OPERATIONAL_PREFIX + "sys1/runs/"
+SYS1_FORM_ACTIONS = ("submission", "hello")
 
 MAX_RECORDED_CALLS = 200
 
@@ -47,6 +55,8 @@ class DaemonState:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.started_at = time.time()
+        # First, so a bad sys1 profile stops startup before any thread exists.
+        self.sys1 = Sys1Service(config)
         self.provider = build_provider(config)
         self.executor = ThreadPoolExecutor(
             max_workers=config.max_upstream_concurrency,
@@ -121,6 +131,10 @@ class DaemonState:
             }
 
     def close(self) -> None:
+        # sys1 first: its runs are marked cancelled, their waiting handlers are answered,
+        # and their jobs are closed. Only then does the bare executor shut down, because
+        # that call waits without a time limit.
+        self.sys1.close()
         self.executor.shutdown(wait=True, cancel_futures=True)
         self.provider.close()
 
@@ -282,6 +296,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._require_auth()
                 self._send_json(200, wire.model_metadata_list(self.state.config.model_catalogue()))
                 return
+            if path == SYS1_MODELS_PATH:
+                self._require_auth()
+                self._send_json(200, wire.model_metadata_list(self.state.sys1.model_catalogue()))
+                return
+            if path == SYS1_EVALUATE_PATH:
+                raise errors.MethodNotAllowedError(f"{SYS1_EVALUATE_PATH} accepts POST.")
             if path == OPERATIONAL_PREFIX + "health":
                 self._send_json(200, self._health())
                 return
@@ -328,9 +348,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         try:
+            if path == SYS1_EVALUATE_PATH:
+                self._handle_sys1_evaluate()
+                return
+            if path.startswith(SYS1_RUNS_PREFIX):
+                run_id, _, action = path[len(SYS1_RUNS_PREFIX) :].partition("/")
+                if action not in SYS1_FORM_ACTIONS:
+                    raise errors.NotFoundError(f"No route matches POST {path}.")
+                self._handle_sys1_form(run_id, action)
+                return
             if path != PINNED_EVALUATE_PATH:
-                if path == PINNED_MODELS_PATH:
-                    raise errors.MethodNotAllowedError(f"{PINNED_MODELS_PATH} accepts GET.")
+                if path in (PINNED_MODELS_PATH, SYS1_MODELS_PATH):
+                    raise errors.MethodNotAllowedError(f"{path} accepts GET.")
                 raise errors.NotFoundError(f"No route matches POST {path}.")
             self._handle_evaluate()
         except errors.JevmulatorError as error:
@@ -357,12 +386,18 @@ class Handler(BaseHTTPRequestHandler):
             "upstream_model": config.upstream_model,
             "resolved_model_name": config.resolved_model_name,
             "port": config.port,
+            # sys1 readiness is reported apart from the bare path's. ``ready`` and
+            # ``problems`` above stay about /v1/systemone, so jevmulator.ps1 behaves as before
+            # on a machine without pi.
+            "sys1": self.state.sys1.health(),
         }
 
     def _status(self) -> dict[str, Any]:
+        metrics = self.state.metrics()
+        metrics["sys1"] = self.state.sys1.metrics()
         return {
             "config": self.state.config.public_status(),
-            "metrics": self.state.metrics(),
+            "metrics": metrics,
             "health": self._health(),
         }
 
@@ -431,12 +466,9 @@ class Handler(BaseHTTPRequestHandler):
                     ["body", "state"],
                 )
 
-    def _handle_evaluate(self) -> None:
-        self._require_auth()
-        body = self._read_body()
-
+    def _decode_json(self, body: bytes) -> Any:
         try:
-            payload = json.loads(body.decode("utf-8"))
+            return json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             raise errors.RequestValidationError(
                 [
@@ -447,6 +479,11 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 ]
             ) from exc
+
+    def _handle_evaluate(self) -> None:
+        self._require_auth()
+        body = self._read_body()
+        payload = self._decode_json(body)
 
         request = wire.parse_request(payload)
         self._size_guard(payload, request)
@@ -497,6 +534,41 @@ class Handler(BaseHTTPRequestHandler):
             self.state.release_slot()
             self.state.note_request(failed=failed, partial_usage=partial)
 
+    def _handle_sys1_evaluate(self) -> None:
+        """One request on /sys1: validated like the bare path, answered by an agent run.
+
+        The handler never takes a bare in-flight slot. sys1 has its own run slots, so a
+        run that takes minutes cannot starve /v1/systemone.
+        """
+        self._require_auth()
+        body = self._read_body()
+        payload = self._decode_json(body)
+        request = wire.parse_request(payload)
+        self._size_guard(payload, request)
+
+        sys1 = self.state.sys1
+        profile = sys1.resolve_profile(request.model)
+        outcome, run_id, kind = sys1.evaluate(
+            payload, request, profile, self.headers.get("X-TypeSafe-Retry-Count")
+        )
+        headers = dict(outcome.headers)
+        headers["X-Jevmulator-Sys1-Run"] = run_id
+        headers["X-Jevmulator-Sys1-Coalesced"] = kind
+        self._send_json(outcome.status, outcome.body, headers=headers)
+
+    def _handle_sys1_form(self, run_id: str, action: str) -> None:
+        """A post from a running agent's harness, authenticated by the run's own token.
+
+        The daemon key is not accepted here, and the run token is accepted nowhere else.
+        """
+        header = self.headers.get("Authorization", "")
+        token = header[len("Bearer ") :].strip() if header.startswith("Bearer ") else ""
+        run = self.state.sys1.authorized_run(run_id, token)
+        body = self._read_body()
+        payload = self._decode_json(body)
+        result = run.submit(payload) if action == "submission" else run.hello(payload)
+        self._send_json(200, result)
+
 
 class JevmulatorServer(ThreadingHTTPServer):
     """Threading HTTP server that carries the daemon state."""
@@ -507,7 +579,12 @@ class JevmulatorServer(ThreadingHTTPServer):
 
     def __init__(self, config: Config) -> None:
         self.state = DaemonState(config)
-        super().__init__((config.host, config.port), Handler)
+        try:
+            super().__init__((config.host, config.port), Handler)
+        except OSError:
+            self.state.close()
+            raise
+        self.state.sys1.set_address(self.server_address[0], self.server_address[1])
 
     def handle_error(self, request, client_address) -> None:
         """Do not print a traceback when the client simply went away."""

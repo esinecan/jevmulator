@@ -1,0 +1,12 @@
+{
+  "name": "prototype-first",
+  "description": "Reads and searches files, and builds a small proof of concept in a scratch directory before it judges a claim that running code can settle. Not sandboxed.",
+  "tools": ["read", "grep", "find", "ls", "shell", "write", "edit"],
+  "brief": "briefs/prototype-first.md",
+  "workdir": "scratch",
+  "read_roots": null,
+  "timeout_seconds": 600,
+  "harness": {
+    "pi": {"provider": "zai", "model": "glm-5.3-flash", "thinking": "high"}
+  }
+}

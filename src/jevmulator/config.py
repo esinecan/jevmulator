@@ -29,6 +29,29 @@ THINKING_MODES = ("disabled", "enabled", "omit")
 USAGE_POLICIES = ("upstream", "strict")
 UNKNOWN_MODEL_POLICIES = ("reject", "accept")
 
+#: Harnesses that can run a sys1 agent. ``fake`` is a scripted Python process for tests.
+SYS1_HARNESSES = ("pi", "fake")
+DEFAULT_SYS1_PROFILE = "read-only"
+
+
+def default_sys1_home() -> str:
+    """Where sys1 keeps its runs and its private harness config.
+
+    It sits outside every repository on purpose. An agent's scratch work inside a git
+    checkout could run ``git stash -u`` or ``git reset --hard`` against uncommitted code,
+    and the checkout's ignored ``.jevmulator`` directory would hide such writes from
+    ``git status``.
+    """
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+    else:
+        base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "state"
+        )
+    return os.path.join(base, "jevmulator", "sys1")
+
 
 class ConfigError(ValueError):
     """The environment holds a value this daemon cannot act on."""
@@ -131,6 +154,26 @@ class Config:
     debug_record: bool = False
     log_level: str = "INFO"
 
+    # -- sys1: the harnessed mode on /sys1 ---------------------------------
+    sys1_harness: str = "pi"
+    sys1_default_profile: str = DEFAULT_SYS1_PROFILE
+    sys1_allow_shell: bool = False
+    sys1_home: str = ""
+    sys1_run_timeout_seconds: float = 600.0
+    sys1_stall_seconds: float = 180.0
+    sys1_hello_seconds: float = 60.0
+    sys1_exit_grace_seconds: float = 20.0
+    sys1_max_concurrent_runs: int = 1
+    sys1_max_submissions: int = 3
+    sys1_max_sum_error: float = 0.01
+    sys1_max_nudges: int = 2
+    sys1_result_ttl_seconds: float = 600.0
+    sys1_failure_ttl_seconds: float = 120.0
+    sys1_keep_runs: int = 50
+    sys1_node: str = ""
+    sys1_pi_cli: str = ""
+    sys1_fake_script: str = ""
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     # -- derived identity ------------------------------------------------
@@ -227,6 +270,25 @@ class Config:
             "debug_record": self.debug_record,
             "resolved_model_name": self.resolved_model_name,
             "accepted_models": list(self.accepted_models),
+            "sys1": {
+                "harness": self.sys1_harness,
+                "default_profile": self.sys1_default_profile,
+                "allow_shell": self.sys1_allow_shell,
+                "home": self.sys1_home,
+                "run_timeout_seconds": self.sys1_run_timeout_seconds,
+                "stall_seconds": self.sys1_stall_seconds,
+                "hello_seconds": self.sys1_hello_seconds,
+                "exit_grace_seconds": self.sys1_exit_grace_seconds,
+                "max_concurrent_runs": self.sys1_max_concurrent_runs,
+                "max_submissions": self.sys1_max_submissions,
+                "max_sum_error": self.sys1_max_sum_error,
+                "max_nudges": self.sys1_max_nudges,
+                "result_ttl_seconds": self.sys1_result_ttl_seconds,
+                "failure_ttl_seconds": self.sys1_failure_ttl_seconds,
+                "keep_runs": self.sys1_keep_runs,
+                "node": self.sys1_node,
+                "pi_cli": self.sys1_pi_cli,
+            },
         }
 
 
@@ -353,10 +415,40 @@ def config_from_env(*, port: int | None = None, host: str | None = None) -> Conf
         max_request_chars=_env_int("JEVMULATOR_MAX_REQUEST_CHARS", 0, 0),
         debug_record=_env_bool("JEVMULATOR_DEBUG_RECORD", False),
         log_level=(_env("JEVMULATOR_LOG_LEVEL", "INFO") or "INFO").upper(),
+        sys1_harness=_env_choice("JEVMULATOR_SYS1_HARNESS", "pi", SYS1_HARNESSES),
+        sys1_default_profile=(
+            _env("JEVMULATOR_SYS1_DEFAULT_PROFILE", DEFAULT_SYS1_PROFILE) or DEFAULT_SYS1_PROFILE
+        ),
+        sys1_allow_shell=_env_bool("JEVMULATOR_SYS1_ALLOW_SHELL", False),
+        sys1_home=os.path.abspath(_env("JEVMULATOR_SYS1_HOME") or default_sys1_home()),
+        sys1_run_timeout_seconds=_env_float(
+            "JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS", 600.0, 0.001
+        ),
+        sys1_stall_seconds=_env_float("JEVMULATOR_SYS1_STALL_SECONDS", 180.0, 0.001),
+        sys1_hello_seconds=_env_float("JEVMULATOR_SYS1_HELLO_SECONDS", 60.0, 0.001),
+        sys1_exit_grace_seconds=_env_float("JEVMULATOR_SYS1_EXIT_GRACE_SECONDS", 20.0, 0.0),
+        sys1_max_concurrent_runs=_env_int("JEVMULATOR_SYS1_MAX_CONCURRENT_RUNS", 1, 1),
+        sys1_max_submissions=_env_int("JEVMULATOR_SYS1_MAX_SUBMISSIONS", 3, 1),
+        sys1_max_sum_error=_env_float("JEVMULATOR_SYS1_MAX_SUM_ERROR", 0.01, 0.0),
+        sys1_max_nudges=_env_int("JEVMULATOR_SYS1_MAX_NUDGES", 2, 0),
+        sys1_result_ttl_seconds=_env_float("JEVMULATOR_SYS1_RESULT_TTL_SECONDS", 600.0, 0.0),
+        sys1_failure_ttl_seconds=_env_float(
+            "JEVMULATOR_SYS1_FAILURE_TTL_SECONDS", 120.0, 0.0
+        ),
+        sys1_keep_runs=_env_int("JEVMULATOR_SYS1_KEEP_RUNS", 50, 1),
+        sys1_node=_env("JEVMULATOR_SYS1_NODE") or "",
+        sys1_pi_cli=_env("JEVMULATOR_SYS1_PI_CLI") or "",
+        sys1_fake_script=_env("JEVMULATOR_SYS1_FAKE_SCRIPT") or "",
     )
 
     if config.provider == "openai" and not config.upstream_base_url:
         raise ConfigError("JEVMULATOR_UPSTREAM_BASE_URL must not be empty")
     if config.provider == "openai" and not config.upstream_model:
         raise ConfigError("JEVMULATOR_UPSTREAM_MODEL must not be empty")
+    if config.sys1_max_sum_error < config.probability_tolerance:
+        raise ConfigError(
+            "JEVMULATOR_SYS1_MAX_SUM_ERROR must not be smaller than "
+            f"JEVMULATOR_PROBABILITY_TOLERANCE ({config.probability_tolerance}), got "
+            f"{config.sys1_max_sum_error}"
+        )
     return config

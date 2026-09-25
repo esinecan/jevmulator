@@ -162,3 +162,75 @@ class UpstreamNotConfiguredError(JevmulatorError):
 
     status = 502
     error_type = "upstream_not_configured"
+
+
+# -- sys1: the harnessed mode --------------------------------------------
+#
+# Every sys1 error type starts with ``sys1_``, so a caller can tell an agent-run failure
+# from a bare upstream failure without reading the path it called.
+
+
+class Sys1RunClosedError(JevmulatorError):
+    """A form post arrived for a run that has already reached an outcome."""
+
+    status = 409
+    error_type = "sys1_run_closed"
+
+
+class Sys1BusyError(JevmulatorError):
+    """Every sys1 run slot is taken. ``Retry-After`` names the busy run's remaining time."""
+
+    status = 429
+    error_type = "sys1_busy"
+
+
+class Sys1NoVerdictError(JevmulatorError):
+    """The harness exited without an accepted submission."""
+
+    status = 502
+    error_type = "sys1_no_verdict"
+
+
+class Sys1InvalidSubmissionError(JevmulatorError):
+    """Every allowed submission was rejected by the form."""
+
+    status = 502
+    error_type = "sys1_invalid_submission"
+
+
+class Sys1UnanswerableError(JevmulatorError):
+    """A question no distribution can answer, such as a choice with zero options."""
+
+    status = 502
+    error_type = "sys1_unanswerable"
+
+
+class Sys1HarnessNotConfiguredError(JevmulatorError):
+    """The harness cannot start: a program, an entry point or a key is missing."""
+
+    status = 502
+    error_type = "sys1_harness_not_configured"
+
+
+class Sys1HarnessMismatchError(JevmulatorError):
+    """The harness ran with other tools or another model than the profile names."""
+
+    status = 502
+    error_type = "sys1_harness_mismatch"
+
+
+class Sys1ShuttingDownError(JevmulatorError):
+    status = 503
+    error_type = "sys1_shutting_down"
+
+
+class Sys1TimeoutError(JevmulatorError):
+    status = 504
+    error_type = "sys1_timeout"
+
+
+class Sys1StalledError(JevmulatorError):
+    """The harness produced no event for the stall limit."""
+
+    status = 504
+    error_type = "sys1_stalled"

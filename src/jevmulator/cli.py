@@ -47,6 +47,10 @@ def _serve(args: argparse.Namespace) -> int:
 
     try:
         server = create_server(config)
+    except ConfigError as exc:
+        # A sys1 profile is checked when the daemon is built, so it surfaces here.
+        print(f"jevmulator: configuration error: {exc}", file=sys.stderr)
+        return 2
     except OSError as exc:
         print(
             f"jevmulator: cannot bind {config.host}:{config.port}: {exc}",

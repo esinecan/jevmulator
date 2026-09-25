@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
+import tempfile
 import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -61,16 +64,40 @@ JEVMULATOR_VARS = [
     "JEVMULATOR_STATE_DIR",
     "JEVMULATOR_PORT",
     "JEVMULATOR_HOST",
+    "JEVMULATOR_SYS1_HARNESS",
+    "JEVMULATOR_SYS1_DEFAULT_PROFILE",
+    "JEVMULATOR_SYS1_ALLOW_SHELL",
+    "JEVMULATOR_SYS1_HOME",
+    "JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS",
+    "JEVMULATOR_SYS1_STALL_SECONDS",
+    "JEVMULATOR_SYS1_HELLO_SECONDS",
+    "JEVMULATOR_SYS1_EXIT_GRACE_SECONDS",
+    "JEVMULATOR_SYS1_MAX_CONCURRENT_RUNS",
+    "JEVMULATOR_SYS1_MAX_SUBMISSIONS",
+    "JEVMULATOR_SYS1_MAX_SUM_ERROR",
+    "JEVMULATOR_SYS1_MAX_NUDGES",
+    "JEVMULATOR_SYS1_RESULT_TTL_SECONDS",
+    "JEVMULATOR_SYS1_FAILURE_TTL_SECONDS",
+    "JEVMULATOR_SYS1_KEEP_RUNS",
+    "JEVMULATOR_SYS1_NODE",
+    "JEVMULATOR_SYS1_PI_CLI",
+    "JEVMULATOR_SYS1_FAKE_SCRIPT",
 ]
 
 
 @pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Start every test from a known configuration."""
+def clean_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Start every test from a known configuration.
+
+    sys1 always runs on the scripted fake harness here, with its home in the test's own
+    temporary directory, so no offline test can start pi or write to the user's profile.
+    """
     for name in JEVMULATOR_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("JEVMULATOR_PROVIDER", "fake")
     monkeypatch.setenv("JEVMULATOR_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("JEVMULATOR_SYS1_HARNESS", "fake")
+    monkeypatch.setenv("JEVMULATOR_SYS1_HOME", str(tmp_path / "sys1-home"))
 
 
 def free_port() -> int:
@@ -183,6 +210,13 @@ def start_daemon(**env: str):
         # environment would otherwise let the daemon generate a key the client never sees.
         env.setdefault("JEVMULATOR_API_KEY", TEST_API_KEY)
         env.setdefault("JEVMULATOR_PROVIDER", "fake")
+        # The same holds for sys1: a module-scoped daemon must not reach pi or the user's
+        # profile directory before the autouse fixture has run.
+        env.setdefault("JEVMULATOR_SYS1_HARNESS", "fake")
+        own_home = None
+        if "JEVMULATOR_SYS1_HOME" not in env:
+            own_home = tempfile.mkdtemp(prefix="jevm-sys1-home-")
+            env["JEVMULATOR_SYS1_HOME"] = own_home
 
         previous = {name: os.environ.get(name) for name in env}
         os.environ.update(env)
@@ -213,6 +247,8 @@ def start_daemon(**env: str):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+            if own_home is not None:
+                shutil.rmtree(own_home, ignore_errors=True)
 
     return _runner()
 

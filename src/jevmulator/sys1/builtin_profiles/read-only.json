@@ -1,0 +1,12 @@
+{
+  "name": "read-only",
+  "description": "Reads, searches and lists files. Cannot write files or run commands.",
+  "tools": ["read", "grep", "find", "ls"],
+  "brief": "briefs/read-only.md",
+  "workdir": "scratch",
+  "read_roots": null,
+  "timeout_seconds": 600,
+  "harness": {
+    "pi": {"provider": "zai", "model": "glm-5.3-flash", "thinking": "high"}
+  }
+}
