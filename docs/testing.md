@@ -516,7 +516,7 @@ python -m pytest tests/ -q -m "not windows and not live"
 ## Second acceptance review
 
 An independent rerun and two targeted probes found one test defect and two implementation
-bugs in commit `dda6296`. All three are fixed. No live provider call was made.
+bugs in commit `a02e807`. All three are fixed. No live provider call was made.
 
 ### 15. The 408 test read only the response headers
 
