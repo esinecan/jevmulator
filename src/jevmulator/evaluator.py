@@ -17,7 +17,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import errors, primitives, prompts, wire
+from . import answers, errors, primitives, prompts, wire
+from .answers import AnswerRejected
 from .providers.base import (
     Provider,
     ProviderRefusalError,
@@ -66,10 +67,6 @@ def close_open_brackets(text: str) -> str:
     if in_string or not stack:
         return text
     return text + "".join(reversed(stack))
-
-
-class AnswerRejected(Exception):
-    """The upstream answer cannot be turned into a valid wire answer."""
 
 
 @dataclass
@@ -313,12 +310,12 @@ class Evaluator:
             raise AnswerRejected(
                 f"the JSON object had no object under the key {prompts.ANSWER_KEY!r}"
             )
-
-        if isinstance(question, wire.NoulQuestion):
-            return self._build_noul(answer)
-        if isinstance(question, wire.ChoiceQuestion):
-            return self._build_choice(question, answer)
-        return self._build_score(question, answer)
+        return answers.build_answer(
+            question,
+            answer,
+            normalize=self._config.normalize_probabilities,
+            tolerance=self._config.probability_tolerance,
+        )
 
     def _decode(self, text: str) -> dict[str, Any]:
         cleaned = strip_code_fence(text).strip()
@@ -337,74 +334,6 @@ class Evaluator:
         if not isinstance(payload, dict):
             raise AnswerRejected("the upstream answer was not a JSON object")
         return payload
-
-    def _build_noul(self, answer: dict[str, Any]) -> dict[str, Any]:
-        if "p_yes" not in answer:
-            raise AnswerRejected("the answer object had no 'p_yes' key")
-        value = answer["p_yes"]
-        if not primitives.is_finite_number(value):
-            raise AnswerRejected("'p_yes' was not a finite number")
-        value = float(value)
-        if value < 0.0 or value > 1.0:
-            raise AnswerRejected(f"'p_yes' was {value}, outside the range 0 to 1")
-        return wire.noul_answer(value)
-
-    def _extract_distribution(
-        self, answer: dict[str, Any], expected_keys: list[str]
-    ) -> list[float]:
-        raw = answer.get("probabilities")
-        if not isinstance(raw, dict):
-            raise AnswerRejected("the answer object had no 'probabilities' object")
-        unknown = [key for key in raw if key not in expected_keys]
-        if unknown:
-            raise AnswerRejected(
-                "the answer offered candidates that were never requested: "
-                + ", ".join(repr(key) for key in sorted(unknown)[:5])
-            )
-        missing = [key for key in expected_keys if key not in raw]
-        if missing:
-            raise AnswerRejected(
-                "the answer left out requested candidates: "
-                + ", ".join(repr(key) for key in missing[:5])
-            )
-        values = [raw[key] for key in expected_keys]
-        try:
-            primitives.check_probabilities(values, where="probabilities")
-        except primitives.DistributionError as exc:
-            raise AnswerRejected(str(exc)) from exc
-        return [float(value) for value in values]
-
-    def _build_choice(
-        self, question: wire.ChoiceQuestion, answer: dict[str, Any]
-    ) -> dict[str, Any]:
-        labels = question.labels
-        values = self._extract_distribution(answer, labels)
-        emitted, _error, _rescaled = primitives.normalize_if_needed(
-            values,
-            enabled=self._config.normalize_probabilities,
-            tolerance=self._config.probability_tolerance,
-        )
-        selected = primitives.argmax_label(labels, emitted)
-        confidence = primitives.choice_confidence(emitted)
-        return wire.choice_answer(
-            selected, confidence, dict(zip(labels, emitted))
-        )
-
-    def _build_score(
-        self, question: wire.ScoreQuestion, answer: dict[str, Any]
-    ) -> dict[str, Any]:
-        keys = question.level_keys
-        values = self._extract_distribution(answer, keys)
-        emitted, _error, _rescaled = primitives.normalize_if_needed(
-            values,
-            enabled=self._config.normalize_probabilities,
-            tolerance=self._config.probability_tolerance,
-        )
-        score = primitives.expected_score(emitted)
-        confidence = primitives.score_confidence(emitted)
-        return wire.score_answer(
-            score, confidence, question.legend(), dict(zip(keys, emitted))
-        )
 
     # -- error mapping ---------------------------------------------------
 
