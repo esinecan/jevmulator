@@ -369,6 +369,10 @@ runs no Python cleanup; the job still ends with the daemon's last handle.
 agent and its grandchild end. On POSIX a run is a process group; a hard kill of the daemon
 there leaves the group running.
 
+The run record's process list is sampled from the job once per second, and the record is
+rewritten whenever the list grows. A process that lives less than a second can be missing
+from the list. The job still contains it, so it still ends with the run.
+
 A harness child's environment is built from an allowlist, never by subtracting from the
 daemon's own. It holds system variables, `ZAI_API_KEY`, and the run's own variables. It
 never holds the daemon key. The daemon key is still in `.jevmulator/runtime.json` in plain

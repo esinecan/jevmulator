@@ -472,7 +472,7 @@ every repository. The response header `X-Jevmulator-Sys1-Run` names it. It holds
 
 | File | Content |
 |---|---|
-| `record.json` | Status, reason, the harness's `hello`, every submission and its problems, the accepted rationale and evidence, usage, the run's process ids, and, once the run ends, the map from `q1..qN` to your question IDs. |
+| `record.json` | Status, reason, the harness's `hello`, every submission and its problems, the accepted distributions, rationale and evidence, usage, the run's process ids, and, once the run ends, the map from `q1..qN` to your question IDs. The process list is sampled once per second, so a process that lived less than a second can be missing from it. The job still contained that process and ended it. |
 | `brief.md` | The system prompt the agent read. |
 | `state.json`, `questions.json`, `submission.schema.json` | What the agent could read about the request. |
 | `events.jsonl`, `stderr.log` | The harness's event stream and its errors. |
@@ -492,7 +492,11 @@ treat the debug route.
 | The harness offered other tools or another model than the profile names. | 502 `sys1_harness_mismatch` |
 | No verdict within the run timeout. | 504 `sys1_timeout` |
 | The harness wrote no event for 180 seconds. | 504 `sys1_stalled` |
-| The daemon is shutting down. | 503 `sys1_shutting_down` |
+| The daemon shuts down cleanly, for example on Ctrl+C in the foreground. | 503 `sys1_shutting_down` |
+
+`.\jevmulator.ps1 stop` ends a hidden daemon forcibly after 10 seconds, so a caller waiting
+on a sys1 run sees its connection reset instead of a 503. The run's record then reads
+`ABANDONED` once the daemon starts again.
 
 A failure is never an answer. Every process a run starts sits in one Windows job object,
 and the daemon ends the whole job when the run ends. Windows also ends it when the daemon

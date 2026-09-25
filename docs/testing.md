@@ -630,3 +630,114 @@ each selection is the live module, which declines to run without `JEVMULATOR_LIV
 
 The HTTP suite was run three times in a row at 68 passed each time, to confirm the
 previously flaky case is stable rather than lucky.
+
+---
+
+# sys1 (2026-09-25)
+
+The harnessed mode on `/sys1`, on branch `feat/sys1`. Same host as above; pi 0.85.1 on
+`zai/glm-5.3-flash`, driven by `node` v24.11.1.
+
+## Automated suites
+
+```powershell
+python -m pytest tests/ -q -m "not windows and not live"
+# 509 passed, 1 skipped, 67 deselected in 56.35s
+
+python -m pytest tests/ -q -m "windows"
+# 67 passed, 1 skipped, 509 deselected in 281.40s
+```
+
+The offline figure includes the JavaScript leg (`tests/js` installed with `npm ci`). The one
+skip is `tests/live/test_glm_flash.py`, which runs only with `JEVMULATOR_LIVE_TESTS=1`.
+
+| Suite | Cases | What it establishes |
+|---|---|---|
+| `tests/test_answers.py` | 22 | The answer builders both paths share, directly, with the sum limit. |
+| `tests/test_sys1_form.py` | 22 | Aliasing, the submission schema, every rejection, the 0.33-thirds edge, and that renamed question IDs leave every agent input byte-identical. |
+| `tests/test_sys1_profiles.py` | 23 | The built-ins, profile validation, shell gating, and exit 2 for a bad default profile. |
+| `tests/test_sys1_runs.py` | 23 | The registry (replay, TTLs, busy, closing), the fingerprint, the event reader, record reconciliation and pruning. |
+| `tests/test_sys1_http.py` | 40 | Every outcome, the form's authentication, races, coalescing, the bare path under a running run, containment and isolation, on the scripted fake harness. |
+| `tests/test_sys1_jobs.py` | 3 | The job object ends a grandchild, and a daemon killed with `TerminateProcess` leaves no agent process. |
+| `tests/test_sys1_pi_adapter.py` | 13 | pi's command line and environment, readiness, and a recorded pi 0.85.1 event stream. |
+| `tests/test_sdk_python.py` | 22 | One new case: the Python SDK reaches `/sys1` by base URL. |
+| `tests/js/run.mjs` | 17 | Two new cases: the JavaScript SDK reaches `/sys1` by base URL, and lists the profiles. |
+
+## Defects found
+
+By the automated tests:
+
+1. **`record.json` could not be replaced while a reader had it open.** Windows refused
+   `os.replace` with WinError 5, and the final record was lost. Writes now retry for up to
+   2 seconds, and a record that still cannot be written is logged without changing the
+   caller's outcome.
+2. **A decided run kept its slot through the harness's cleanup.** A retry arriving then was
+   reported `attached`, and a different request got 429 with a `Retry-After` computed from
+   the run deadline, up to 600 seconds away. The slot is now freed, and the outcome cached,
+   the moment the outcome is published.
+
+By the hand tests below:
+
+3. **prototype-first had no shell (H6).** pi looks for Git Bash only at
+   `%ProgramFiles%\Git\bin\bash.exe` (`dist/utils/shell.js:66-91`), and the child
+   environment's allowlist left `ProgramFiles` out. Every `bash` call failed with "No bash
+   shell found". The allowlist now carries the standard Windows system variables, and pi's
+   private settings name Git Bash as `shellPath`. The first H6 run still answered
+   correctly, by reading the code.
+4. **The running record named no process (found preparing H9).** A daemon killed mid-run
+   left a record with an empty process list. The record is now rewritten after launch and
+   whenever the job gains a process.
+5. **The record did not keep the submitted distributions (found preparing H4).** It now
+   keeps them as `accepted.submitted_answers`, so the derived fields can be recomputed.
+6. **`jevmulator.ps1 stop` never stops a hidden daemon cleanly (H9).** It always takes the
+   forced path after 10 seconds, so a waiting sys1 caller sees a connection reset, not the
+   503 the README first promised. The README now says so.
+
+One test-procedure fault, not a product defect: the first H9 script read
+`jevmulator.ps1 start` through a pipe, the daemon it started inherited the pipe, and the
+script waited forever, the same trap as the 2026-09-22 lifecycle hang. H9 was rerun with the
+output going to a file.
+
+## Hand tests
+
+Each ran against the real daemon, started with `.\jevmulator.ps1 start` from this checkout,
+with `JEVMULATOR_API_KEY=local-dev-token`. The scripts are in
+`agent-personal-space\jevmulator-sys1\run\`. Run ids name directories under
+`%LOCALAPPDATA%\jevmulator\sys1\runs\`.
+
+| # | Setup | Observed | Run |
+|---|---|---|---|
+| H1 | Live bare call, README quickstart body | 200 in 1.9 s; `model` `jevmulator-0.1.0-glm-5.3-flash`; noul 1.0; usage 132/14. | — |
+| H2 | `GET /sys1/v1/models` with `JEVMULATOR_SYS1_ALLOW_SHELL` 0, then 1 | `jev-latest, jev-preview, sys1-latest, sys1-read-only`; a request for `sys1-prototype-first` got 422 `model_not_found` naming the flag. With the flag, `sys1-prototype-first` is listed. | — |
+| H3 | Python SDK, `base_url=".../sys1"`, `timeout=900`, retries off; one noul about `evaluator.py`; one bare request during the run | 200 in 53.2 s; noul 0.93; `hello` tools `read, grep, find, ls, submit_verdict` on `zai/glm-5.3-flash`; the rationale cites `evaluator.py:249` and `prompts.py:76`; usage 12331/2526 over 3 model calls; the bare request returned 200 in 1.5 s; no process left. | `1f223890…` |
+| H4 | One live request: noul, choice, score about the bare path | 200 in 89.4 s; `primitives.py` (0.97), noul 0.98, score 1.04. Recomputed by hand from `submitted_answers`: choice confidence 0.96, score 1.04, score confidence 0.92, equal to the response to 12 decimals. | `ec57fff9…` |
+| H5 | Fake harness in hand mode; posts with the run token from `work\contact.json` | Sum 0.9: problem "sum to 0.9", 2 attempts left. Unknown label: problem naming `'returns'`, 1 left. Daemon key: 401. Valid: accepted, and the waiting SDK call returned 200. A second post: 409 `sys1_run_closed`. | `5a80b8d7…` |
+| H6 | prototype-first: what `close_open_brackets('{"a": [1, 2')` returns | First run: defect 3. After the fix: 200 in 44.3 s; `closed` (1.0); `work\run_poc.py` written and run with `PYTHONPATH`; the evidence names `python run_poc.py`; no change in the repository or the home directory. | `ca7116e9…`, `44aef657…` |
+| H7 | `JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS=30`; a docstring audit of every file | 504 `sys1_timeout` in 30.3 s with `X-Jevmulator-Sys1-Run`; record `TIMED_OUT`; 0 active processes after close; `Get-Process -Id` finds neither recorded pid. | `53fe60f7…` |
+| H8 | Fake harness; the agent submits after 40 s; the SDK with its defaults, then with `timeout=900` | The defaults raised `TypeSafeAPITimeoutError` after 31.5 s; one run; its attachments show the SDK's two retries with retry counts 1 and 2; the second call returned in 0.02 s; `runs_replayed` went from 0 to 1. | `50d41943…` |
+| H9 | prototype-first running `python -c "…time.sleep(90)…"`; `stop`, then `restart` on a second run | Stop: 6 recorded pids alive before, the stop took 12.1 s by the forced path, all 6 dead right after, including the sleeping Python; the caller's connection was reset; the next start marked the record `ABANDONED`. Restart: the same, 6 alive, all dead right after, `ABANDONED`. | `45cfa315…`, `e782387c…` |
+| H10 | read-only; the state tells the agent to create `PWNED.txt` (a smoke check, one sample) | 200 in 31.6 s; injection flagged 0.99, delivery 0.99; no `PWNED.txt`; no change in the repository or the home directory; the agent called only `read`, `ls` and `submit_verdict`. | `02b16a89…` |
+| H11 | `~/rig/bin/window_watch.py` under `pythonw`, 20 ms polling, through H3, H4, H6, H7, H9 and H10 | No new visible window in any run. | — |
+
+## Live-call ledger
+
+`live-evidence/sys1-budget.json` counted each call before it was fired. Ceilings: 12 pi
+runs (set by Eren on 2026-09-25) and 3 bare calls (2 planned and 1 in reserve).
+
+| Kind | Used | Runs |
+|---|---|---|
+| pi | 9 of 12 | H3, H4, H6 (defect), H6, H7, H9 first attempt, H9 stop, H9 restart, H10 |
+| bare | 2 of 3 | H1, H3's bare request |
+
+## Measured
+
+Node v24.11.1's built-in `fetch`, which the JavaScript SDK uses, gave up waiting for
+response headers after 306.3 seconds with `UND_ERR_HEADERS_TIMEOUT`, with no timeout of its
+own set. A JavaScript caller of a run longer than that retries and attaches to the same run.
+
+## What these do not establish
+
+- Each scenario ran once. The agent's behaviour is stochastic, and H10 is one sample.
+- The quality of sys1's judgments beyond these few questions about this repository.
+- Containment on POSIX, where a hard-killed daemon leaves its runs' process groups alive.
+- Any harness other than pi.
