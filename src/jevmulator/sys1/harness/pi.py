@@ -52,6 +52,23 @@ PI_SETTINGS = {
 SEARCH_BINARIES = ("rg.exe", "fd.exe") if os.name == "nt" else ("rg", "fd")
 
 
+def find_git_bash() -> str:
+    """Git Bash where pi itself looks first (``dist/utils/shell.js``), or an empty string.
+
+    The path is written into the private settings as ``shellPath``, so a shell profile
+    finds its shell whatever the child environment holds.
+    """
+    if os.name != "nt":
+        return ""
+    for variable in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        root = os.environ.get(variable)
+        if root:
+            candidate = Path(root) / "Git" / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+    return ""
+
+
 def derive_cli() -> str:
     """pi's entry point, found next to the ``pi`` shim on PATH."""
     shim = shutil.which("pi")
@@ -102,7 +119,11 @@ class PiHarness(Harness):
     def _prepare_agent_dir(self) -> list[str]:
         self.agent_dir.mkdir(parents=True, exist_ok=True)
         settings_path = self.agent_dir / "settings.json"
-        wanted = json.dumps(PI_SETTINGS, indent=2) + "\n"
+        settings = dict(PI_SETTINGS)
+        shell = find_git_bash()
+        if shell:
+            settings["shellPath"] = shell
+        wanted = json.dumps(settings, indent=2) + "\n"
         if not settings_path.exists() or settings_path.read_text(encoding="utf-8") != wanted:
             settings_path.write_text(wanted, encoding="utf-8", newline="\n")
         bin_dir = self.agent_dir / "bin"

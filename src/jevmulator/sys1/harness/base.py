@@ -12,9 +12,13 @@ from ..jobs import RunJob
 from ..profiles import Profile
 
 #: System variables a harness child may inherit. Everything else is left out: the child
-#: environment is built from this list, never by subtracting from the daemon's own.
+#: environment is built from this list, never by subtracting from the daemon's own. None of
+#: them holds a secret. Programs locate themselves through them: pi finds Git Bash only as
+#: ``%ProgramFiles%\Git\bin\bash.exe``, so without ``ProgramFiles`` a shell profile had no
+#: shell at all (hand test H6, 2026-09-25).
 SYSTEM_VARIABLES_WINDOWS = (
     "SystemRoot",
+    "SystemDrive",
     "windir",
     "ComSpec",
     "PATH",
@@ -22,10 +26,22 @@ SYSTEM_VARIABLES_WINDOWS = (
     "TEMP",
     "TMP",
     "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "COMPUTERNAME",
     "HOMEDRIVE",
     "HOMEPATH",
     "APPDATA",
     "LOCALAPPDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "ProgramData",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "ALLUSERSPROFILE",
+    "PUBLIC",
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
     "OS",

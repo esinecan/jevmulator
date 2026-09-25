@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,9 @@ class TestEnvironment:
         assert env["GIT_CEILING_DIRECTORIES"].endswith("a" * 32)
         for secret in ("JEVMULATOR_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"):
             assert secret not in env
+        if os.name == "nt":
+            # Hand test H6 (2026-09-25): without ProgramFiles, pi finds no Git Bash.
+            assert env["ProgramFiles"] == os.environ["ProgramFiles"]
         assert not [name for name in env if name.startswith("JEVMULATOR_")]
         assert "daemon-key" not in json.dumps(env)
 
@@ -138,13 +142,28 @@ class TestEnvironment:
 
 
 class TestReadiness:
-    def test_ready_with_everything_present(self, install):
+    def test_ready_with_everything_present(self, install, monkeypatch, tmp_path):
+        program_files = tmp_path / "ProgramFiles"
+        (program_files / "Git" / "bin").mkdir(parents=True)
+        (program_files / "Git" / "bin" / "bash.exe").write_bytes(b"")
+        monkeypatch.setenv("ProgramFiles", str(program_files))
         adapter = harness()
         assert adapter.problems() == []
         settings = json.loads((adapter.agent_dir / "settings.json").read_text(encoding="utf-8"))
-        assert settings == PI_SETTINGS and settings["packages"] == []
+        assert settings["packages"] == []
+        assert {key: value for key, value in settings.items() if key != "shellPath"} == PI_SETTINGS
+        if os.name == "nt":
+            # pi finds Git Bash only under %ProgramFiles%; the settings name it outright.
+            assert settings["shellPath"] == str(program_files / "Git" / "bin" / "bash.exe")
         for name in pi_module.SEARCH_BINARIES:
             assert (adapter.agent_dir / "bin" / name).is_file()
+
+    def test_no_shell_path_without_git_bash(self, install, monkeypatch, tmp_path):
+        for variable in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            monkeypatch.setenv(variable, str(tmp_path / "empty"))
+        adapter = harness()
+        settings = json.loads((adapter.agent_dir / "settings.json").read_text(encoding="utf-8"))
+        assert "shellPath" not in settings
 
     def test_each_missing_piece_is_named(self, install, monkeypatch, tmp_path):
         monkeypatch.setenv("JEVMULATOR_SYS1_NODE", str(tmp_path / "no-node.exe"))
@@ -191,6 +210,20 @@ class TestEvents:
         {"type": "agent_end", "messages": []},
         {"type": "agent_settled"},
     ]
+
+    def test_a_recorded_pi_stream(self):
+        """pi 0.85.1's real stream from hand test H3, reduced to the fields the parser reads.
+
+        The response to that run reported 12331 input and 2526 output tokens.
+        """
+        path = Path(__file__).parent / "fixtures" / "sys1" / "pi-0.85.1-read-only-events.jsonl"
+        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+        calls = [info for info in map(digest, events) if info.is_model_call]
+        assert len(calls) == 3
+        assert sum(info.input_tokens for info in calls) == 12331
+        assert sum(info.output_tokens for info in calls) == 2526
+        assert {info.model for info in calls} == {"zai/glm-5.3-flash"}
+        assert digest(events[-1]).settled
 
     def test_usage_and_model_from_a_pi_stream(self):
         digests = [digest(event) for event in self.STREAM]

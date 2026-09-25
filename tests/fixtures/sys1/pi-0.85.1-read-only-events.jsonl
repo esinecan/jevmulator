@@ -1,0 +1,38 @@
+{"type": "session"}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "message_start", "message": {"role": "user"}}
+{"type": "message_end", "message": {"role": "user"}}
+{"type": "message_start", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}, "stopReason": "pending"}}
+{"type": "message_end", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 1636, "output": 154, "cacheRead": 0, "cacheWrite": 0, "reasoning": 71, "totalTokens": 1790, "cost": {"input": 0.0001227, "output": 3.85e-05, "cacheRead": 0, "cacheWrite": 0, "total": 0.00016120000000000002}}, "stopReason": "toolUse"}}
+{"type": "tool_execution_start", "toolName": "read"}
+{"type": "tool_execution_start", "toolName": "ls"}
+{"type": "tool_execution_end", "toolName": "read", "isError": false}
+{"type": "tool_execution_end", "toolName": "ls", "isError": false}
+{"type": "message_start", "message": {"role": "toolResult"}}
+{"type": "message_end", "message": {"role": "toolResult"}}
+{"type": "message_start", "message": {"role": "toolResult"}}
+{"type": "message_end", "message": {"role": "toolResult"}}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"type": "message_start", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}, "stopReason": "pending"}}
+{"type": "message_end", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 4502, "output": 743, "cacheRead": 64, "cacheWrite": 0, "reasoning": 621, "totalTokens": 5309, "cost": {"input": 0.00033765, "output": 0.00018575, "cacheRead": 9.6e-07, "cacheWrite": 0, "total": 0.0005243600000000001}}, "stopReason": "toolUse"}}
+{"type": "tool_execution_start", "toolName": "grep"}
+{"type": "tool_execution_start", "toolName": "grep"}
+{"type": "tool_execution_end", "toolName": "grep", "isError": false}
+{"type": "tool_execution_end", "toolName": "grep", "isError": false}
+{"type": "message_start", "message": {"role": "toolResult"}}
+{"type": "message_end", "message": {"role": "toolResult"}}
+{"type": "message_start", "message": {"role": "toolResult"}}
+{"type": "message_end", "message": {"role": "toolResult"}}
+{"type": "turn_end"}
+{"type": "turn_start"}
+{"type": "message_start", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}, "stopReason": "pending"}}
+{"type": "message_end", "message": {"role": "assistant", "provider": "zai", "model": "glm-5.3-flash", "usage": {"input": 1585, "output": 1629, "cacheRead": 4544, "cacheWrite": 0, "reasoning": 871, "totalTokens": 7758, "cost": {"input": 0.00011887499999999999, "output": 0.00040725, "cacheRead": 6.816e-05, "cacheWrite": 0, "total": 0.000594285}}, "stopReason": "toolUse"}}
+{"type": "tool_execution_start", "toolName": "submit_verdict"}
+{"type": "tool_execution_end", "toolName": "submit_verdict", "isError": false}
+{"type": "message_start", "message": {"role": "toolResult"}}
+{"type": "message_end", "message": {"role": "toolResult"}}
+{"type": "turn_end"}
+{"type": "agent_end"}
+{"type": "agent_settled"}

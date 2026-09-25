@@ -181,6 +181,7 @@ class Run:
         self.attempts_left = settings.max_submissions
         self.submissions: list[dict[str, Any]] = []
         self.accepted: form.FormResult | None = None
+        self.accepted_raw: Any = None
         self.hello_report: dict[str, Any] | None = None
         self.hello_at: float | None = None
         self.attachments: list[dict[str, Any]] = []
@@ -250,6 +251,7 @@ class Run:
             )
             if result.accepted:
                 self.accepted = result
+                self.accepted_raw = payload.get("answers")
                 self._transition_locked(RunState.ACCEPTED, "a submission was accepted")
                 return {"accepted": True, "message": "Accepted. Your verdict is recorded. Stop now."}
             self.attempts_left -= 1
@@ -534,7 +536,13 @@ class Run:
             "submissions": self.submissions,
             "attempts_left": self.attempts_left,
             "accepted": (
-                {"rationale": self.accepted.rationale, "evidence": self.accepted.evidence}
+                {
+                    "rationale": self.accepted.rationale,
+                    "evidence": self.accepted.evidence,
+                    # The distributions exactly as the agent submitted them, so anyone can
+                    # recompute the derived fields in the response by hand.
+                    "submitted_answers": self.accepted_raw,
+                }
                 if self.accepted is not None
                 else None
             ),

@@ -192,6 +192,7 @@ class TestSuccess:
             assert record["question_ids"] == {"q1": "billing", "q2": "tone", "q3": "urgency"}
             assert record["hello"]["tools"] == ["find", "grep", "ls", "read", "submit_verdict"]
             assert record["accepted"]["rationale"] == "fake agent: a scripted verdict"
+            assert record["accepted"]["submitted_answers"]["q1"] == {"p_yes": 0.7}
             assert record["active_processes_after_close"] == 0
 
     def test_invalid_then_valid(self, tmp_path):
