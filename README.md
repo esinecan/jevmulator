@@ -408,7 +408,7 @@ every request, because the state comes from the caller and could steer the shell
 ### Calling it
 
 The SDKs' defaults are sized for Jev, which answers in about 200 ms. A sys1 run takes
-minutes. Set the timeout above the run timeout, which is 600 seconds by default, and turn
+minutes. Set the timeout above the run timeout, which is 1200 seconds by default, and turn
 retries off:
 
 ```python
@@ -417,7 +417,7 @@ from typesafe_sdk import TypeSafeClient, RetryPolicy, Noul
 client = TypeSafeClient(
     api_key="local-dev-token",
     base_url="http://127.0.0.1:8769/sys1",
-    timeout=900,
+    timeout=1500,
     retry=RetryPolicy(max_retries=0),
 )
 response = client.system_one(
@@ -596,7 +596,7 @@ the guards are off by default and are an approximation when you turn them on.
 | `JEVMULATOR_SYS1_DEFAULT_PROFILE` | `read-only` | The profile `jev-latest`, `jev-preview` and `sys1-latest` select. |
 | `JEVMULATOR_SYS1_ALLOW_SHELL` | `0` | `1` enables profiles that can write files or run commands, such as `prototype-first`. |
 | `JEVMULATOR_SYS1_HOME` | `%LOCALAPPDATA%\jevmulator\sys1` | Run directories and pi's private agent directory. Keep it outside every repository. |
-| `JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS` | `600` | The longest a run may take. A profile's own `timeout_seconds` can only shorten it. |
+| `JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS` | `1200` | The longest a run may take. A profile's own `timeout_seconds` can only shorten it. |
 | `JEVMULATOR_SYS1_STALL_SECONDS` | `180` | A harness that writes no event this long is ended, with 504 `sys1_stalled`. |
 | `JEVMULATOR_SYS1_HELLO_SECONDS` | `60` | A harness must report its tools and model within this time. |
 | `JEVMULATOR_SYS1_EXIT_GRACE_SECONDS` | `20` | After a verdict, how long the harness may take to exit before its job is closed. |

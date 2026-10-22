@@ -111,7 +111,7 @@ def parse_profile(data: Any, *, brief_dir: Path, source: str) -> Profile:
             raise fail("'read_roots' must be null or a list of absolute paths")
         read_roots = tuple(os.path.normpath(root) for root in read_roots)
 
-    timeout = data.get("timeout_seconds", 600)
+    timeout = data.get("timeout_seconds", 1200)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
         raise fail("'timeout_seconds' must be a positive number")
 

@@ -159,7 +159,7 @@ class Config:
     sys1_default_profile: str = DEFAULT_SYS1_PROFILE
     sys1_allow_shell: bool = False
     sys1_home: str = ""
-    sys1_run_timeout_seconds: float = 600.0
+    sys1_run_timeout_seconds: float = 1200.0
     sys1_stall_seconds: float = 180.0
     sys1_hello_seconds: float = 60.0
     sys1_exit_grace_seconds: float = 20.0
@@ -422,7 +422,7 @@ def config_from_env(*, port: int | None = None, host: str | None = None) -> Conf
         sys1_allow_shell=_env_bool("JEVMULATOR_SYS1_ALLOW_SHELL", False),
         sys1_home=os.path.abspath(_env("JEVMULATOR_SYS1_HOME") or default_sys1_home()),
         sys1_run_timeout_seconds=_env_float(
-            "JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS", 600.0, 0.001
+            "JEVMULATOR_SYS1_RUN_TIMEOUT_SECONDS", 1200.0, 0.001
         ),
         sys1_stall_seconds=_env_float("JEVMULATOR_SYS1_STALL_SECONDS", 180.0, 0.001),
         sys1_hello_seconds=_env_float("JEVMULATOR_SYS1_HELLO_SECONDS", 60.0, 0.001),

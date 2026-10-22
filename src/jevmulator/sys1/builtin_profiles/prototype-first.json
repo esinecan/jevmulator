@@ -5,7 +5,7 @@
   "brief": "briefs/prototype-first.md",
   "workdir": "scratch",
   "read_roots": null,
-  "timeout_seconds": 600,
+  "timeout_seconds": 1200,
   "harness": {
     "pi": {"provider": "zai", "model": "glm-5.3-flash", "thinking": "high"}
   }
