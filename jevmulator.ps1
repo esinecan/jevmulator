@@ -51,6 +51,8 @@ $StateDir = Join-Path $ProjectRoot '.jevmulator'
 $RuntimeFile = Join-Path $StateDir 'runtime.json'
 $OutLog = Join-Path $StateDir 'daemon.out.log'
 $ErrLog = Join-Path $StateDir 'daemon.err.log'
+$StartTrace = Join-Path $StateDir 'start-trace.log'
+$ScriptLaunch = (Get-Process -Id $PID).StartTime
 
 # Command-line parsing and state-directory comparison live in one file, which the
 # regression tests dot-source directly. The tests therefore exercise this code, not a copy.
@@ -80,6 +82,16 @@ function Write-Utf8NoBom {
     param([string]$Path, [string]$Content)
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
+function Write-StartTrace {
+    param([string]$Step)
+    $now = Get-Date
+    $line = '{0} pid={1} +{2}ms {3}' -f $now.ToString('o'), $PID, [int]($now - $ScriptLaunch).TotalMilliseconds, $Step
+    try {
+        if (-not (Test-Path -LiteralPath $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
+        [System.IO.File]::AppendAllText($StartTrace, $line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
 }
 
 function Read-Utf8 {
@@ -262,11 +274,15 @@ function Remove-StaleRuntime {
 # --------------------------------------------------------------------------
 
 function Invoke-Start {
+    Write-StartTrace "start: entered, powershell launched $($ScriptLaunch.ToString('o'))"
     $record = Get-RuntimeRecord
+    Write-StartTrace "start: runtime record $(if ($null -eq $record) { 'absent' } else { "present, pid $($record.pid)" })"
     $existing = Get-DaemonProcess -Record $record
+    Write-StartTrace "start: identity check done $(if ($null -eq $existing) { "($script:IdentityReason)" } else { '(daemon alive)' })"
 
     if ($null -ne $existing) {
         $health = Get-Health -BaseUrl $record.base_url
+        Write-StartTrace "start: health of the running daemon $(if ($null -eq $health) { 'none' } else { 'ok' })"
         if ($null -ne $health) {
             Write-Host "jevmulator: already running on $($record.base_url) as process $($record.pid)."
             return 0
@@ -280,7 +296,9 @@ function Invoke-Start {
     }
 
     $targetPort = Resolve-Port -Record $null
-    if (Test-PortInUse -TestPort $targetPort) {
+    $portInUse = Test-PortInUse -TestPort $targetPort
+    Write-StartTrace "start: port $targetPort $(if ($portInUse) { 'in use' } else { 'free' })"
+    if ($portInUse) {
         Write-Failure "jevmulator: port $targetPort is already in use. Choose another with -Port."
         return 2
     }
@@ -288,11 +306,17 @@ function Invoke-Start {
     if (-not (Test-Path -LiteralPath $StateDir)) {
         New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
     }
+    if (Test-Path -LiteralPath $ErrLog) {
+        foreach ($previous in @(Get-Content -LiteralPath $ErrLog -Tail 20 -ErrorAction SilentlyContinue)) {
+            Write-StartTrace "previous daemon.err.log: $previous"
+        }
+    }
     foreach ($log in @($OutLog, $ErrLog)) {
         Write-Utf8NoBom -Path $log -Content ''
     }
 
     $pythonExe = Resolve-Python
+    Write-StartTrace "start: python $pythonExe"
     $rawArguments = @('-X', 'utf8', '-m', 'jevmulator', 'serve', '--port', "$targetPort", '--state-dir', $StateDir)
     $arguments = ($rawArguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' '
 
@@ -305,13 +329,16 @@ function Invoke-Start {
             -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog
     } catch {
+        Write-StartTrace "start: Start-Process failed: $($_.Exception.Message)"
         Write-Failure "jevmulator: cannot start '$pythonExe': $($_.Exception.Message)"
         return 3
     }
+    Write-StartTrace "start: daemon process $($process.Id) launched"
 
     $baseUrl = "http://127.0.0.1:$targetPort"
     $deadline = (Get-Date).AddSeconds($ReadyTimeoutSeconds)
     $health = $null
+    $probe = 0
     while ((Get-Date) -lt $deadline) {
         if ($process.HasExited) {
             $stderr = ''
@@ -321,12 +348,16 @@ function Invoke-Start {
             Write-Failure "jevmulator: the daemon exited with code $exitCode before it was ready.`n$stderr"
             return 3
         }
+        $probe++
+        $probeStarted = Get-Date
         $health = Get-Health -BaseUrl $baseUrl -TimeoutSeconds 2
+        Write-StartTrace "start: probe $probe $(if ($null -eq $health) { 'no answer' } else { 'answered' }) in $([int]((Get-Date) - $probeStarted).TotalMilliseconds) ms"
         if ($null -ne $health) { break }
         Start-Sleep -Milliseconds 250
     }
 
     if ($null -eq $health) {
+        Write-StartTrace "start: not ready after $ReadyTimeoutSeconds s, daemon exited: $($process.HasExited)"
         Write-Failure "jevmulator: the daemon did not become ready within $ReadyTimeoutSeconds seconds. See $ErrLog."
         try { $process.Kill() } catch { }
         return 4
@@ -444,12 +475,18 @@ function Invoke-Stop {
 }
 
 switch ($Command) {
-    'start'   { exit (Invoke-Start) }
+    'start'   {
+        $code = Invoke-Start
+        Write-StartTrace "start: exit $code"
+        exit $code
+    }
     'status'  { exit (Invoke-Status) }
     'stop'    { exit (Invoke-Stop) }
     'restart' {
         $code = Invoke-Stop
         if ($code -ne 0) { exit $code }
-        exit (Invoke-Start)
+        $code = Invoke-Start
+        Write-StartTrace "start: exit $code"
+        exit $code
     }
 }
