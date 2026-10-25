@@ -15,6 +15,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from . import __version__, runtime
@@ -133,6 +134,25 @@ def _print_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _inspect_transcript(args: argparse.Namespace) -> int:
+    from .sys1.harness.transcript import inspect, render_markdown
+
+    path = Path(args.path)
+    try:
+        report = inspect(path, top=args.top)
+    except (OSError, UnicodeError) as exc:
+        print(f"jevmulator: cannot read transcript: {exc}", file=sys.stderr)
+        return 3
+    if report["records_parsed"] == 0:
+        print("jevmulator: transcript contains no JSON event objects", file=sys.stderr)
+        return 4
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(render_markdown(report), end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="jevmulator",
@@ -164,6 +184,18 @@ def build_parser() -> argparse.ArgumentParser:
     key = sub.add_parser("print-key", help="print the daemon API key from the runtime file")
     key.add_argument("--state-dir", default=None)
     key.set_defaults(func=_print_key)
+
+    inspect_transcript = sub.add_parser(
+        "inspect-transcript",
+        help="inspect one pi/sys1 JSONL event transcript",
+    )
+    inspect_transcript.add_argument("path", help="path to one events.jsonl file")
+    inspect_transcript.add_argument("--json", action="store_true", help="emit JSON, not Markdown")
+    inspect_transcript.add_argument(
+        "--top", type=int, default=10, choices=range(1, 101), metavar="N",
+        help="number of largest tool outputs to list, 1-100 (default 10)",
+    )
+    inspect_transcript.set_defaults(func=_inspect_transcript)
 
     return parser
 

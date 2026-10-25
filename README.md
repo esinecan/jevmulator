@@ -511,6 +511,21 @@ every repository. The response header `X-Jevmulator-Sys1-Run` names it. It holds
 The newest 50 runs are kept. The records hold your state, so treat the directory as you
 treat the debug route.
 
+### Inspecting one harness transcript
+
+`inspect-transcript` reads one pi/sys1 `events.jsonl` file directly. It is local,
+read-only and streaming; it does not need a running daemon, a model, or network access.
+Markdown is the default:
+
+```powershell
+python -m jevmulator inspect-transcript "$env:LOCALAPPDATA\jevmulator\sys1\runs\<run_id>\events.jsonl"
+```
+
+Use `--json` for machine-readable output and `--top N` to control how many large tool
+results are listed. The report covers turns, model calls, token usage, reported cost,
+tool actions and errors, tool mix, stop reasons, duration, settlement, and structural
+diagnostics. It never prints prompts, tool arguments, or tool-result bodies.
+
 ### How a run ends
 
 | Outcome | Response |
