@@ -3,9 +3,10 @@
 This module is skipped unless ``JEVMULATOR_LIVE_TESTS=1`` is set, so an ordinary test run
 never spends money and never leaves this machine.
 
-Every case uses synthetic, nonsensitive text. The whole module is bounded by
-``LIVE_CALL_CEILING`` upstream calls; once that budget is spent, the remaining cases skip
-rather than continuing to spend.
+Every case uses synthetic, nonsensitive text. Every run of this module draws on one budget
+of ``LIVE_CALL_CEILING`` upstream calls. The count lives in the ledger file ``LEDGER_PATH``
+and carries over from run to run; once the budget is spent, the remaining cases skip.
+Delete the ledger to start a new budget.
 
 Two properties are reported separately, and the distinction matters:
 
@@ -35,7 +36,7 @@ if os.environ.get("JEVMULATOR_LIVE_TESTS") != "1":
         allow_module_level=True,
     )
 
-#: Hard ceiling on upstream calls for this module, per the implementation brief.
+#: Hard ceiling on upstream calls across every run that shares the ledger.
 LIVE_CALL_CEILING = int(os.environ.get("JEVMULATOR_LIVE_CALL_CEILING", "30"))
 
 #: Where the evidence file is written. Kept out of git by .gitignore.
@@ -45,30 +46,52 @@ EVIDENCE_PATH = os.environ.get(
                  "live-evidence", "glm-flash-run.json"),
 )
 
+LEDGER_PATH = os.environ.get(
+    "JEVMULATOR_LIVE_LEDGER",
+    os.path.join(os.path.dirname(EVIDENCE_PATH), "budget-ledger.json"),
+)
+
 UPSTREAM_MODEL = os.environ.get("JEVMULATOR_UPSTREAM_MODEL", "glm-5.3-flash")
 
 
 class Budget:
-    """Counts upstream calls across the module and stops the run at the ceiling."""
-
-    def __init__(self, ceiling: int) -> None:
+    def __init__(self, ceiling: int, ledger_path: str) -> None:
         self.ceiling = ceiling
+        self.ledger_path = ledger_path
+        self.before = self._load()
         self.spent = 0
         self.records: list[dict[str, Any]] = []
 
+    def _load(self) -> int:
+        try:
+            with open(self.ledger_path, "r", encoding="utf-8") as handle:
+                return int(json.load(handle)["upstream_calls_spent"])
+        except FileNotFoundError:
+            return 0
+
+    @property
+    def total(self) -> int:
+        return self.before + self.spent
+
     def check(self, needed: int) -> None:
-        if self.spent + needed > self.ceiling:
+        if self.total + needed > self.ceiling:
             pytest.skip(
-                f"live call budget exhausted: {self.spent} of {self.ceiling} spent, "
-                f"{needed} more needed"
+                f"live call budget exhausted: {self.total} of {self.ceiling} spent across runs "
+                f"(ledger {self.ledger_path}), {needed} more needed"
             )
 
     def note(self, record: dict[str, Any]) -> None:
         self.spent += record.get("upstream_calls", 0)
         self.records.append(record)
+        os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
+        temporary = self.ledger_path + ".tmp"
+        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump({"upstream_calls_spent": self.total, "call_ceiling": self.ceiling}, handle)
+            handle.write("\n")
+        os.replace(temporary, self.ledger_path)
 
 
-BUDGET = Budget(LIVE_CALL_CEILING)
+BUDGET = Budget(LIVE_CALL_CEILING, LEDGER_PATH)
 
 
 @pytest.fixture(scope="module")
@@ -400,7 +423,9 @@ def test_write_the_evidence_file() -> None:
     summary = {
         "upstream_model": UPSTREAM_MODEL,
         "call_ceiling": LIVE_CALL_CEILING,
-        "upstream_calls_spent": BUDGET.spent,
+        "upstream_calls_this_run": BUDGET.spent,
+        "upstream_calls_ledger_total": BUDGET.total,
+        "ledger_path": LEDGER_PATH,
         "requests": len(BUDGET.records),
         "requests_succeeded": len(successes),
         "input_tokens_total": sum(
@@ -425,4 +450,4 @@ def test_write_the_evidence_file() -> None:
             ensure_ascii=False,
         )
     )
-    assert BUDGET.spent <= LIVE_CALL_CEILING
+    assert BUDGET.total <= LIVE_CALL_CEILING

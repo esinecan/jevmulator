@@ -833,7 +833,9 @@ $env:JEVMULATOR_LIVE_TESTS = "1"
 python -m pytest tests/live -q -s
 ```
 
-The module stops at 30 upstream calls. Raise or lower that with
+The module stops at 30 upstream calls in total, across runs. It keeps the count in
+`live-evidence/budget-ledger.json`. Delete that file to start a new budget, or point
+`JEVMULATOR_LIVE_LEDGER` at another file. Raise or lower the ceiling with
 `JEVMULATOR_LIVE_CALL_CEILING`. Timings, token counts and judgment verdicts are written to
 `live-evidence/glm-flash-run.json`, which git ignores.
 
