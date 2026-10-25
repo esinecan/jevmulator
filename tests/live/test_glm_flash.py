@@ -83,7 +83,7 @@ class Budget:
     def note(self, record: dict[str, Any]) -> None:
         self.spent += record.get("upstream_calls", 0)
         self.records.append(record)
-        os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self.ledger_path) or ".", exist_ok=True)
         temporary = self.ledger_path + ".tmp"
         with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
             json.dump({"upstream_calls_spent": self.total, "call_ceiling": self.ceiling}, handle)
