@@ -362,8 +362,9 @@ second run.
 
 Every process of a run lives in one Windows job object with `KILL_ON_JOB_CLOSE`
 (`sys1/jobs.py`). The root starts suspended, joins the job, and then resumes, so every
-process it starts is inside the job from its first instruction. `jevmulator.ps1 stop`
-ends a daemon that has not exited within 10 seconds with `Stop-Process -Force`, which
+process it starts is inside the job from its first instruction. `jevmulator.ps1 stop` first posts to `/_jevmulator/shutdown` with the daemon key, which runs
+the same clean shutdown as Ctrl+C. It ends a daemon that has not exited within 10 seconds
+with `Stop-Process -Force`, which
 runs no Python cleanup; the job still ends with the daemon's last handle.
 `tests/test_sys1_jobs.py` kills a real daemon with `TerminateProcess` and checks that the
 agent and its grandchild end. On POSIX a run is a process group; a hard kill of the daemon

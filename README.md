@@ -57,6 +57,7 @@ Three operational routes, outside the pinned surface:
 | `GET /_jevmulator/health` | Is the daemon up, and can it reach an upstream model? |
 | `GET /_jevmulator/status` | The whole configuration and some counters. Never a secret. |
 | `GET /_jevmulator/debug/upstream-calls` | The exact payloads sent upstream. Off by default, and requires the bearer token. |
+| `POST /_jevmulator/shutdown` | Shuts the daemon down cleanly, as Ctrl+C does. Requires the bearer token. `jevmulator.ps1 stop` and `restart` call it. |
 
 A second mode, **sys1**, answers the same requests with a harnessed agent instead of a bare
 model. It sits on sibling routes, `POST /sys1/v1/systemone` and `GET /sys1/v1/models`. See
@@ -538,9 +539,10 @@ diagnostics. It never prints prompts, tool arguments, or tool-result bodies.
 | The harness wrote no event for 180 seconds. | 504 `sys1_stalled` |
 | The daemon shuts down cleanly, for example on Ctrl+C in the foreground. | 503 `sys1_shutting_down` |
 
-`.\jevmulator.ps1 stop` ends a hidden daemon forcibly after 10 seconds, so a caller waiting
-on a sys1 run sees its connection reset instead of a 503. The run's record then reads
-`ABANDONED` once the daemon starts again.
+`.\jevmulator.ps1 stop` asks a hidden daemon to shut down over `POST /_jevmulator/shutdown`,
+so a caller waiting on a sys1 run gets the 503. A daemon that has not exited 10 seconds
+later is ended forcibly. Its waiting callers then see their connection reset, and the run's
+record reads `ABANDONED` once the daemon starts again.
 
 A failure is never an answer. Every process a run starts sits in one Windows job object,
 and the daemon ends the whole job when the run ends. Windows also ends it when the daemon

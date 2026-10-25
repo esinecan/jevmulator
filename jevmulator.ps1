@@ -416,6 +416,19 @@ function Stop-DaemonTree {
     & taskkill.exe /T /F /PID $Id 2>&1 | Out-Null
 }
 
+function Request-DaemonShutdown {
+    param($Record)
+    try {
+        Invoke-WebRequest -Uri "$($Record.base_url)/_jevmulator/shutdown" -Method Post -UseBasicParsing `
+            -Headers @{ Authorization = "Bearer $($Record.api_key)" } `
+            -ContentType 'application/json' -Body '{}' -TimeoutSec 5 | Out-Null
+        return $true
+    } catch {
+        Write-Host "jevmulator: the shutdown route did not accept the request: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Stop-StrayDaemons {
     $killed = 0
     foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue)) {
@@ -698,8 +711,9 @@ function Invoke-TaskRestart {
         Write-Host "jevmulator: no daemon to restart ($script:IdentityReason). The supervisor is starting one."
         return (Wait-TaskReady)
     }
-    Write-Host "jevmulator: killing process $($record.pid); the supervisor starts a new one."
-    Stop-DaemonTree -Id $record.pid
+    Write-Host "jevmulator: stopping process $($record.pid); the supervisor starts a new one."
+    if (Request-DaemonShutdown -Record $record) { $null = $process.WaitForExit(10000) }
+    if (-not $process.HasExited) { Stop-DaemonTree -Id $record.pid }
     return (Wait-TaskReady -NotPid ([int]$record.pid))
 }
 
@@ -837,11 +851,10 @@ function Invoke-Stop {
     }
 
     Write-Host "jevmulator: stopping process $($record.pid) ..."
-    try {
-        $process.CloseMainWindow() | Out-Null
-    } catch { }
+    $graceSeconds = 0
+    if (Request-DaemonShutdown -Record $record) { $graceSeconds = 10 }
 
-    $deadline = (Get-Date).AddSeconds(10)
+    $deadline = (Get-Date).AddSeconds($graceSeconds)
     while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
         Start-Sleep -Milliseconds 200
         $process.Refresh()

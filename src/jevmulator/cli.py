@@ -69,12 +69,17 @@ def _serve(args: argparse.Namespace) -> int:
 
     stopping = threading.Event()
 
-    def _shutdown(signum: int, _frame: Any) -> None:
+    def _begin_shutdown(reason: str) -> None:
         if stopping.is_set():
             return
         stopping.set()
-        print(f"jevmulator: signal {signum} received, shutting down", flush=True)
+        print(f"jevmulator: {reason}, shutting down", flush=True)
         threading.Thread(target=server.shutdown, daemon=True).start()
+
+    def _shutdown(signum: int, _frame: Any) -> None:
+        _begin_shutdown(f"signal {signum} received")
+
+    server.request_shutdown = _begin_shutdown
 
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         signal_number = getattr(signal, name, None)

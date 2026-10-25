@@ -237,6 +237,20 @@ class TestStartStatusStop:
         ).code == 0
         assert workspace.read_runtime()["port"] == second_port
 
+    def test_stop_shuts_a_hidden_daemon_down_cleanly(self, workspace) -> None:
+        port = free_port()
+        assert workspace.run("start", "-Port", str(port), "-ReadyTimeoutSeconds", READY_TIMEOUT).code == 0
+        started = time.monotonic()
+        result = workspace.run("stop")
+        elapsed = time.monotonic() - started
+        assert result.code == 0, result.output
+        log_path = os.path.join(workspace.root, ".jevmulator", "daemon.out.log")
+        with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+            log = handle.read()
+        assert "shutdown requested on /_jevmulator/shutdown, shutting down" in log
+        assert "jevmulator: stopped" in log
+        assert elapsed < 8, f"stop took {elapsed:.1f} s"
+
 
 class TestDefaultPort:
     def test_start_without_a_port_uses_8769(self, workspace) -> None:

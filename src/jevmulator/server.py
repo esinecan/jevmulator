@@ -15,7 +15,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 
 from . import CONTRACT_PIN_DATE, __version__, errors, wire
 from .config import Config
@@ -29,6 +29,7 @@ LOGGER = logging.getLogger("jevmulator")
 PINNED_EVALUATE_PATH = "/v1/systemone"
 PINNED_MODELS_PATH = "/v1/models"
 OPERATIONAL_PREFIX = "/_jevmulator/"
+SHUTDOWN_PATH = OPERATIONAL_PREFIX + "shutdown"
 
 #: The harnessed mode mirrors the pinned layout under ``/sys1``, with the pinned bodies, so
 #: an official SDK reaches it by changing only its base URL.
@@ -348,6 +349,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         try:
+            if path == SHUTDOWN_PATH:
+                self._handle_shutdown()
+                return
             if path == SYS1_EVALUATE_PATH:
                 self._handle_sys1_evaluate()
                 return
@@ -569,6 +573,15 @@ class Handler(BaseHTTPRequestHandler):
         result = run.submit(payload) if action == "submission" else run.hello(payload)
         self._send_json(200, result)
 
+    def _handle_shutdown(self) -> None:
+        self._require_auth()
+        request_shutdown = getattr(self.server, "request_shutdown", None)
+        if request_shutdown is None:
+            raise errors.NotFoundError(f"No route matches POST {SHUTDOWN_PATH}.")
+        self.close_connection = True
+        self._send_json(202, {"shutting_down": True})
+        request_shutdown(f"shutdown requested on {SHUTDOWN_PATH}")
+
 
 class JevmulatorServer(ThreadingHTTPServer):
     """Threading HTTP server that carries the daemon state."""
@@ -578,6 +591,7 @@ class JevmulatorServer(ThreadingHTTPServer):
     request_queue_size = 64
 
     def __init__(self, config: Config) -> None:
+        self.request_shutdown: Callable[[str], None] | None = None
         self.state = DaemonState(config)
         try:
             super().__init__((config.host, config.port), Handler)

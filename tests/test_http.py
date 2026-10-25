@@ -689,3 +689,24 @@ class TestTricklingClientIsBounded:
             finally:
                 for raw in sockets:
                     raw.close()
+
+
+class TestShutdownRoute:
+    def test_requires_the_daemon_key(self, daemon):
+        reasons = []
+        daemon.server.request_shutdown = reasons.append
+        response = daemon.client.request("POST", "/_jevmulator/shutdown", {}, api_key=None)
+        assert response.status == 401
+        assert reasons == []
+
+    def test_is_not_a_route_without_a_shutdown_callback(self, daemon):
+        response = daemon.client.request("POST", "/_jevmulator/shutdown", {})
+        assert response.status == 404
+
+    def test_answers_202_and_requests_the_shutdown(self, daemon):
+        reasons = []
+        daemon.server.request_shutdown = reasons.append
+        response = daemon.client.request("POST", "/_jevmulator/shutdown", {})
+        assert response.status == 202
+        assert response.body == {"shutting_down": True}
+        assert reasons == ["shutdown requested on /_jevmulator/shutdown"]
