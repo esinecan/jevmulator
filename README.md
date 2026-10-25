@@ -216,6 +216,35 @@ Run the daemon in the foreground instead, when you want to watch it:
 python -m jevmulator serve --port 8769
 ```
 
+### Keep it running
+
+```powershell
+.\jevmulator.ps1 install
+.\jevmulator.ps1 start
+```
+
+`install` registers the scheduled task `jevmulator-daemon`. The task runs
+`jevmulator.ps1 supervise` at logon and every 5 minutes, through a waiting `wscript` shim
+that opens no window. A second run while the supervisor lives does nothing. `-Shim` names
+the shim when it is not at `%USERPROFILE%\rig\agent-jobs\runner\run-hidden.vbs`.
+
+The supervisor owns the daemon on port 8769:
+
+- **The daemon exits.** The supervisor starts it again after 3, 10, 30 or 60 seconds. After
+  ten exits in five minutes it waits 60 seconds.
+- **The daemon stops answering.** The supervisor calls `/_jevmulator/health` every 20
+  seconds with a 15 second timeout. After 6 misses in a row it kills the daemon's process
+  tree and starts a new one. A daemon that never answers is killed after 300 seconds.
+- **The supervisor dies.** The task's next 5-minute run starts a new supervisor.
+
+While the task exists, the other commands act through the supervisor. `start` starts the
+task and waits for the daemon. `restart` kills the daemon only, and the supervisor starts a
+new one. `stop` writes `.jevmulator/paused`, stops the supervisor and the daemon, and the
+task then starts nothing until the next `start`. `status` prints a verdict line first:
+`ok`, `starting`, `slow`, `respawning`, `paused` or `down`.
+
+The supervisor logs each spawn, exit, missed probe and kill to `.jevmulator/supervisor.log`.
+
 ---
 
 ## Calling it
